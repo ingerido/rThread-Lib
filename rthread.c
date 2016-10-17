@@ -92,7 +92,7 @@ int isQueueEmpty(Queue q)
 /* initial rThread User level Package */
 void rthread_init(uint size) 
 {
-	/* Initialize log file */
+	/* Initialize error log file */
 	FILE * fp;
 	fp = fopen ("rThread_err_log", "w");
 	dup2(fileno(fp), STDERR_FILENO);
@@ -250,16 +250,16 @@ int rthread_schedule()
 	sigemptyset(&sigProcMask);
 	sigaddset(&sigProcMask, SIGPROF);
 
-    /* Set Signal Handler to Call Scheduler */
-    memset(&schedHandle, 0, sizeof(schedHandle));
+	/* Set Signal Handler to Call Scheduler */
+	memset(&schedHandle, 0, sizeof(schedHandle));
 	schedHandle.sa_flags = SA_SIGINFO;
-    schedHandle.sa_handler = &schedule;
-    sigaction(SIGPROF, &schedHandle, NULL);
+	schedHandle.sa_handler = &schedule;
+	sigaction(SIGPROF, &schedHandle, NULL);
 
-    timeQuantum.it_value.tv_sec = 0;
-    timeQuantum.it_value.tv_usec = 500000;
-    timeQuantum.it_interval.tv_sec = 0;
-    timeQuantum.it_interval.tv_usec = 500000;
+	timeQuantum.it_value.tv_sec = 0;
+	timeQuantum.it_value.tv_usec = 500000;
+	timeQuantum.it_interval.tv_sec = 0;
+	timeQuantum.it_interval.tv_usec = 500000;
 	setitimer(ITIMER_PROF, &timeQuantum, NULL);
 
 	/*  grab and run a user level thread from 

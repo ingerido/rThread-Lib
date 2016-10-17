@@ -48,9 +48,6 @@
 
 #define ERR_LOG(string) fprintf(stderr, "rThread: " string "\n")
 
-#define errExit(msg)    do { perror(msg); exit(EXIT_FAILURE); \
-                       } while (0)
-
 #define GET_TCB(uc_ptr, tcb, ctx) \
 				((tcb*)((char*)(uc_ptr) - (unsigned long long)(&((tcb*)0)->ctx)))
 
