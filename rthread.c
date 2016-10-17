@@ -37,7 +37,7 @@ static int _user_thread_num = 0;
 static uint _spinlock = 0;
 
 /* global semaphore for user level thread */
-static sem_t sem_thread[THREAD_MAX];
+static sig_semaphore sigsem_thread[THREAD_MAX];
 
 /* timer and signal for user level thread scheduling */
 static struct sigaction schedHandle;
@@ -134,8 +134,9 @@ int rthread_create(rthread_t *tid,
 		newThread->tid = _user_thread_num++;
 		*tid = newThread->tid;
 
-		/* Initialize sem_thread */
-		sem_init(&sem_thread[newThread->tid], 0, 0);
+		/* Initialize sigsem_thread */
+		sigsem_thread[newThread->tid].val = NULL;
+		sem_init(&(sigsem_thread[newThread->tid].semaphore), 0, 0);
 
 		/* using uContext to create a context for this user level thread */
 		if (-1 == getcontext(&newThread->context)) {
@@ -206,20 +207,32 @@ int rthread_yield(void *uc)
 int rthread_join(rthread_t thread, void **value_ptr) 
 {
 	/* do P() in thread semaphore until the certain user level thread is done */
-	sem_wait(&sem_thread[thread]);
+	sem_wait(&(sigsem_thread[thread].semaphore));
+	/* get the value's location passed to rthread_exit */
+	if (value_ptr && sigsem_thread[thread].val)
+		memcpy((unsigned long*)*value_ptr, sigsem_thread[thread].val, sizeof(unsigned long));
 	return 0;
 }
 
 /* terminate a thread */
-void rthread_exit(void *tcb) 
+void rthread_exit(void *uc, void *retval) 
 {
-	_tcb* current_tcb = (_tcb*)tcb;
+	_tcb* current_tcb = GET_TCB((ucontext_t*)uc, _tcb, context);
+	rthread_t current_id = current_tcb->tid;
+
 	current_tcb->status = TERMINATED;
 	fprintf(stdout, "User Level Thread tid = %d terminates!\n", current_tcb->tid);
 	/* When this thread finished, delete TCB and yield CPU control */
-	free(current_tcb->stack);
-	free(current_tcb);
-	setcontext(&context_main);	
+	_user_thread_num--;
+	
+	sigsem_thread[current_id].val = (unsigned long*)malloc(sizeof(unsigned long));
+	memcpy(sigsem_thread[current_id].val, retval, sizeof(unsigned long));
+
+	while(__sync_lock_test_and_set(&_spinlock, 1));
+	enQueue(&_thread_queue, uc);	
+	__sync_lock_release(&_spinlock);
+
+	swapcontext((ucontext_t*)uc, &context_main);
 }
 
 /* schedule the user level threads */
@@ -266,6 +279,7 @@ int rthread_schedule()
 		the user level thread queue, until no available 
         user level thread  */
 	ucontext_t *next_thread_uc = NULL;
+	_tcb* current_tcb = NULL;
 	while (1) {
 		//sigprocmask(SIG_BLOCK, &sigProcMask, NULL);
 		while(__sync_lock_test_and_set(&_spinlock, 1));
@@ -277,7 +291,19 @@ int rthread_schedule()
 			break;
 		}
 		__sync_lock_release(&_spinlock);
+
+		_tcb* current_tcb = GET_TCB((ucontext_t*)next_thread_uc, _tcb, context);
 		
+		/* current user thread is already terminated by rthread_exit() */
+		if (TERMINATED == current_tcb->status) {
+			/* do V() in thread semaphore implies current user level thread is done */
+			sem_post(&(sigsem_thread[current_tcb->tid].semaphore));
+			free(current_tcb->stack);
+			free(current_tcb);
+			_user_thread_num--;
+			continue;
+		}
+
 		current_uthread_context = (ucontext_t*)next_thread_uc;
 		swapcontext(&context_main, (ucontext_t*)next_thread_uc);
 		//sigprocmask(SIG_UNBLOCK, &sigProcMask, NULL);
@@ -302,14 +328,16 @@ void u_thread_exec_func(void (*thread_func)(void*, void*), void *arg, _tcb *newT
 	free(u_thread);
 	_user_thread_num--;
 	/* do V() in thread semaphore implies current user level thread is done */
-	sem_post(&sem_thread[current_id]);
+	sem_post(&(sigsem_thread[current_id].semaphore));
 }
 
 /* run kernel level thread function */
 void k_thread_exec_func(void *arg, void *reserved) 
 {
 	char *t_name = (char*) arg;
-	ucontext_t *run_thread_uc = NULL;
+	ucontext_t *next_thread_uc = NULL;
+	_tcb* current_tcb = NULL;
+
 	fprintf(stdout, "I'm Kernel Level Thread \"%s\"  tid = %d \n", t_name, (int)syscall(SYS_gettid));
 	
 	/*  grab and run a user level thread from 
@@ -318,14 +346,26 @@ void k_thread_exec_func(void *arg, void *reserved)
 	while (1) {
 TAS:	while(__sync_lock_test_and_set(&_spinlock, 1));
 
-		if (0 != deQueue(&_thread_queue, (void**)&run_thread_uc)) {
+		if (0 != deQueue(&_thread_queue, (void**)&next_thread_uc)) {
 			__sync_lock_release(&_spinlock);
 			//goto TAS;
 			exit(0);
 		}
 		__sync_lock_release(&_spinlock);
 
-		swapcontext(&context_main, (ucontext_t*)run_thread_uc);
+		_tcb* current_tcb = GET_TCB((ucontext_t*)next_thread_uc, _tcb, context);
+		
+		/* current user thread is already terminated by rthread_exit() */
+		if (TERMINATED == current_tcb->status) {
+			/* do V() in thread semaphore implies current user level thread is done */
+			sem_post(&(sigsem_thread[current_tcb->tid].semaphore));
+			free(current_tcb->stack);
+			free(current_tcb);
+			_user_thread_num--;
+			continue;
+		}
+
+		swapcontext(&context_main, (ucontext_t*)next_thread_uc);
 	}
 }
 

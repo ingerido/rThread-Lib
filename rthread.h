@@ -21,7 +21,7 @@
 
 #define _GNU_SOURCE
 
-#define _DEBUG_
+//#define _DEBUG_
 
 #include <unistd.h>
 #include <sys/syscall.h>
@@ -67,13 +67,19 @@ typedef enum threadStatus {
 	FINISHED,
 } threadStatus;
 
-/* user_level Thread Control Block Implementation */
+/* user_level Thread Control Block Definition */
 typedef struct threadControlBlock {
 	rthread_t   tid;			/* Thread ID            */
 	threadStatus status;		/* Thread Status        */
 	ucontext_t context;			/* Thread Contex        */
 	void *stack;				/* Thread Stack pointer */
 } _tcb;
+
+/* sig_semaphore Definition */
+typedef struct sig_semaphore {
+	sem_t semaphore;
+	unsigned long *val;
+} sig_semaphore;
 
 /* Queue ADT */
 typedef struct Queue {
@@ -108,7 +114,7 @@ int rthread_yield(void *context);
 int rthread_join(rthread_t thread, void **value_ptr);
 
 /* terminate a thread */
-void rthread_exit(void *tcb);
+void rthread_exit(void *tcb, void *retval);
 
 /* schedule user level threads */
 int rthread_schedule();

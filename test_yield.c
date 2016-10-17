@@ -35,12 +35,14 @@ void tst(void* uc, void* arg) {
 	}
 	fprintf(stdout, "User Level Thread \"%s\" pause !\n", t_name);
 	sleep(1);
+	//rthread_exit(uc, &i);
 	fprintf(stdout, "User Level Thread \"%s\" resume !\n", t_name);	
 	for (i = 0; i < 0xFFFF; i++) {
 		if (i == 0)
 			fprintf(stdout, "User Level Thread \"%s\" is running in tid = %d \n", t_name, (int)syscall(SYS_gettid));
 	}		
 	fprintf(stdout, "User Level Thread \"%s\" finish !\n", t_name);
+	//rthread_exit(uc, &i);
 }
 
 void cal(void* uc, void* arg) {
@@ -60,7 +62,6 @@ void cal(void* uc, void* arg) {
 		}
 	}
 	fprintf(stdout, "User Level Thread \"%s\" pause !\n", t_name);
-	rthread_yield(uc);
 	//sleep(1);
 	fprintf(stdout, "User Level Thread \"%s\" resume in tid = %d !\n", t_name, (int)syscall(SYS_gettid));	
 	while (i < 0xFFFF) {
@@ -79,6 +80,8 @@ void cal(void* uc, void* arg) {
 int main() {
 	rthread_t u1, u2, u3, u4;
 	rthread_t k1, k2, k3, k4;
+
+	int *tmp;
 
 	for (int j = 0; j < 0xFFFF; j++)
 		for (int i = 0; i < 4; i++)
@@ -111,6 +114,7 @@ int main() {
 	rthread_schedule();
 
 	//sleep(5);
+	//rthread_join(u1, &tmp);
 	rthread_join(u1, NULL);
 	rthread_join(u2, NULL);
 	rthread_join(u3, NULL);
