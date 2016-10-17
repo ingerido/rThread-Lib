@@ -169,9 +169,6 @@ int rthread_yield(void *uc) {
 	_tcb* current_tcb = GET_TCB(uc, _tcb, context);
 	while(__sync_lock_test_and_set(&_spinlock, 1));
 
-	printf("aaaaa*** 0x%x ***aaaaa\n", uc);
-	printf("bbbbb*** 0x%x ***bbbbb\n", &current_tcb->context);
-
 	if (RUNNING == current_tcb->status) {
 		
 		/*printf("yielding... !\n");
