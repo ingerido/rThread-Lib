@@ -94,7 +94,7 @@ void rthread_init(uint size)
 {
 	/* Initialize log file */
 	FILE * fp;
-	fp = fopen ("rThread_log", "w");
+	fp = fopen ("rThread_err_log", "w");
 	dup2(fileno(fp), STDERR_FILENO);
 
 	/* Initialize _thread_queue */

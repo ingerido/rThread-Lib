@@ -8,10 +8,10 @@ all:: test_condvar test_yield
 	#strip test_yield
 
 test_condvar: rthread.a test_condvar.o
-	$(CC) -pthread -o test_condvar test_condvar.o -L./ -lrthread -lrt
+	$(CC) -pthread -o test_condvar test_condvar.o -L./ -lrthread
 
 test_yield: rthread.a test_yield.o
-	$(CC) -pthread -o test_yield test_yield.o -L./ -lrthread -lrt
+	$(CC) -pthread -o test_yield test_yield.o -L./ -lrthread
 
 test_condvar.o: rthread.a
 	$(CC) $(CFLAGS) test_condvar.c
@@ -27,4 +27,4 @@ rthread.o: rthread.h
 	$(CC) $(CFLAGS) rthread.c
 
 clean:
-	rm -rf test_condvar test_yield *.o *.a
+	rm -rf test_condvar test_yield rThread_err_log *.o *.a
