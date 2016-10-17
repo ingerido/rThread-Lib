@@ -1,196 +1,167 @@
-/* Copyright (C) 2015 -
+/* Copyright (C) 2015 - 2016
  
-   		The rThread package is a "POSIX pThread-like" library, including basic function of 
-		thread in linux system. rThread library implements kernel level thread creation, 
-		synchronization (mutex and condition variable) and destroy operations. In addtion,
-   		rThread library also provide "pure" user level thread, which is totally scheduled 
-		and managed in user mode and totally opaque to the linux kernel.
+   		The rThread package is a light-weight thread library, including basic function of 
+		thread in linux system. rThread library implements user level thread creation, 
+		synchronization (mutex and condition variable) and destroy operations. rThread Library
+		combines advantages of kernel level threads and user level threads; in rThread Library
+		kernel threads runs in a loop grabs available user threads to run. And the user could
+		modify the schedule strategies in user level threads.
 
  * Author: Yujie REN 
- * Date: 09/26/2015 - 10/11/2015
+ * Date:   09/26/2015 - 10/11/2015
+ * update: 10/10/2016 (Modify logic from tcb queue to queue ADT to improve code reusablility)
+ * update: 10/12/2016 (Modify logic in thread creation, yield and eliminate runtime error)
+ * update: 10/14/2016 (Modify logic in thread mutex and condition variable)
+ * update: 10/15/2016 (Add logic in thread exit and thread join)
 */
 
 #ifndef RTHREAD_H
 #define RTHREAD_H
+
+#define _GNU_SOURCE
 
 #include <unistd.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
-#include <stdlib.h>
+#include <assert.h>
 #include <ucontext.h>
 #include <sched.h>
 #include <signal.h>
+#include <time.h>
 #include <semaphore.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 /* MACRO Definition */
 #define KERNEL_LEVEL 0
-#define USER_LEVEL   1
-
-#define ULONLY       0
-#define KLMATCHCORES 1
-#define KLMATCHHYPER 2
-#define KLALWAYS     3
+#define   USER_LEVEL 1
 
 #define _THREAD_STACK 1024*32
 
 #define THREAD_MAX 16
-#define THREAD_QUEUE_MAX (THREAD_MAX+1)
 
 #define ERR_LOG(string) fprintf(stderr, "rThread: " string "\n")
 
-/* TYPEDEF */
+#define errExit(msg)    do { perror(msg); exit(EXIT_FAILURE); \
+                       } while (0)
+
+#define GET_TCB(uc_ptr, tcb, ctx) \
+				((tcb*)((char*)(uc_ptr) - (unsigned long long)(&((tcb*)0)->ctx)))
+
+/* Typedef */
 typedef uint threadMode;
 
 typedef uint threadLevel;
 
-typedef unsigned long int rthread_t;
+typedef uint rthread_t;
 
-typedef enum bool {
-	FALSE = 0,
-	TRUE,
-} bool;
-
-/*********************************************************
- - rThread Status Definition
-**********************************************************/
+/* rThread Status Definition */
 typedef enum threadStatus {
 	NOT_STARTED = 0,
 	RUNNING,
-	HALTING,
+	SUSPENDED,
+	TERMINATED,
 	FINISHED,
 } threadStatus;
 
-/*********************************************************
- - rThread Control Block Implementation
-**********************************************************/
-typedef struct threadControlBlock{
+/* user_level Thread Control Block Implementation */
+typedef struct threadControlBlock {
 	rthread_t   tid;			/* Thread ID            */
 	threadLevel level;			/* Thread Level         */
 	threadStatus status;		/* Thread Status        */
 	ucontext_t context;			/* Thread Contex        */
-	void* stack;				/* Thread Stack pointer */
+	void *stack;				/* Thread Stack pointer */
 } _tcb;
 
-/*********************************************************
- - rThread User Level Run Queue Implementation
-**********************************************************/
-typedef struct threadQueue {
-	_tcb* queue[THREAD_QUEUE_MAX];
+/* Queue ADT */
+typedef struct Queue {
+	void **queue;
+	int size;
 	int head;
 	int rear;
-} threadQueue;
+} Queue;
 
-/* User level Thread Queue Definition */
-static threadQueue _queue;
+int enQueue(Queue *q, void *element);
 
-int enThreadQueue(_tcb* thd);
+int deQueue(Queue *q, void **element);
 
-int deThreadQueue(_tcb** thd);
-
-bool isThreadQueueEmpty();
+int isQueueEmpty(Queue q);
 
 /*********************************************************
- - Global Variable Definition
-**********************************************************/
-/* main thread context */
-static ucontext_t context_main;
-
-/* current running user level thread */
-static _tcb *current_u_Thread = NULL;
-
-/* number of active kernel threads */
-static int kernel_thread_num = 0;
-
-/* number of active threads */
-static int user_thread_num = 0;
-
-/* global spinlock for critical section _queue */
-static uint _spinlock;
-
-/*********************************************************
- - rThread Operation Implementation
+                    rThread Operation
 **********************************************************/
 /* initial rThread User level Package */
-void rthread_init(void (*task_exec_func)(void*), void* arg);
+void rthread_init(uint size);
 
 /* create a new thread according to thread level */
-int rthread_create(rthread_t* tid,
+int rthread_create(rthread_t *tid,
                    threadLevel level,
-                   void (*start_func)(void*),
-                   void* arg);
+                   void (*start_func)(void*, void*),
+                   void *arg);
 
 /* give CPU pocession to other user level threads voluntarily */
-int rthread_yield();
+int rthread_yield(void *context);
 
-/* after a thread terminating, delete this thread */
-void rthread_exit(void* tid);
+/* wait for thread termination */
+int rthread_join(rthread_t thread, void **value_ptr);
 
-/* manage user level threads */
-int rthread_manage();
+/* terminate a thread */
+void rthread_exit(void *tcb);
 
-/* start user level thread function */
-static void u_thread_exec_func(void (*thread_func)(void*), void* arg, _tcb* newThread);
+/* schedule user level threads */
+int rthread_schedule();
 
-/* activation record for user level threads mounted in a kernel level thread */
-int  k_thread_exec_func(void* arg);
+/* start user level thread wrapper function */
+void u_thread_exec_func(void (*thread_func)(void*, void*), void *arg, _tcb *newThread);
+
+/* run kernel level thread function */
+void k_thread_exec_func(void *arg, void *reserved);
+
 
 /*********************************************************
- - Mutual Exclusive Lock
+				Mutual Exclusive Lock
 **********************************************************/
 /* mutex struct definition */
 typedef struct rthread_mutex_t {
-	rthread_t owner_tid;
+	_tcb *owner;
 	uint lock;
+	Queue wait_list;
 } rthread_mutex_t;
 
-/* global mutex variable */
-//static rthread_mutex_t mutex;
-
 /* initial the mutex lock */
-int rthread_mutex_init(rthread_mutex_t* mutex, void* arg);
+int rthread_mutex_init(rthread_mutex_t *mutex);
 
 /* aquire the mutex lock */
-int rthread_mutex_lock(rthread_mutex_t* mutex);
+int rthread_mutex_lock(rthread_mutex_t *mutex, void *arg);
 
 /* release the mutex lock */
-int rthread_mutex_unlock(rthread_mutex_t* mutex);
+int rthread_mutex_unlock(rthread_mutex_t *mutex);
+
 
 /*********************************************************
- - Condition Variable
+					Condition Variable
 **********************************************************/
-/* condition waiting sequence */
-typedef struct rthread_cond_seq {
-	_tcb* u_wait_thread;
-	struct rthread_cond_seq* next;
-} rthread_cond_seq;
-
 /* condition variable struct definition */
 typedef struct rthread_cond_t {
-	//threadLevel thread_level;
-	rthread_cond_seq* cond_seq;
-	rthread_cond_seq* ready;
-	rthread_mutex_t seq_mutex;
+	Queue wait_list;
+	rthread_mutex_t list_mutex;
 } rthread_cond_t;
 
-/* global condition variable */
-//static rthread_cond_t condvar;
-
 /* initial condition variable */
-int rthread_cond_init(rthread_cond_t* condvar, void* arg);
+int rthread_cond_init(rthread_cond_t *condvar);
 
 /* wake up all threads on waiting list */
-int rthread_cond_broadcast(rthread_cond_t* condvar);
+int rthread_cond_broadcast(rthread_cond_t *condvar);
 
 /* wake up a thread on waiting list */
-int rthread_cond_signal(rthread_cond_t* condvar);
+int rthread_cond_signal(rthread_cond_t *condvar);
 
-/* current thread go to sleep until other thread wakes me up*/
-int rthread_cond_wait(rthread_cond_t* condvar, rthread_mutex_t* mutex);
+/* current thread go to sleep until other thread wakes it up*/
+int rthread_cond_wait(rthread_cond_t *condvar, rthread_mutex_t *mutex, void *arg);
 
 #endif
 
-/***********************  end of rthread.h  **************************/
+/* -------------------------- end of rthread.h -------------------------- */

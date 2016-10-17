@@ -6,7 +6,7 @@ rthread_cond_t    condvar;
 
 int cnt = 0;
 
-void mutex_cond_demo(void* arg) {
+void mutex_cond_demo(void* uc, void* arg) {
 	cnt++;
 
 	char *t_name = (char *) arg;
@@ -15,7 +15,7 @@ void mutex_cond_demo(void* arg) {
 	fprintf(stdout, "\nThread \"%s\" has been born!\n\n", t_name);
 
 	// grab the mutex lock
-	rthread_mutex_lock(&mutex);			
+	rthread_mutex_lock(&mutex, uc);			
 
 	// spin 5 times
 	while(count++ < 5) {
@@ -23,7 +23,7 @@ void mutex_cond_demo(void* arg) {
 	
 		rthread_cond_signal(&condvar);
 
-		rthread_cond_wait(&condvar, &mutex);
+		rthread_cond_wait(&condvar, &mutex, uc);
 		sleep(1);
 	}
 
@@ -31,30 +31,69 @@ void mutex_cond_demo(void* arg) {
 	rthread_mutex_unlock(&mutex);
 
 	fprintf(stdout, "Thread %s is dying!\n", t_name);
-	rthread_cond_broadcast(&condvar);	
-	//rthread_cond_signal(&condvar);
+	rthread_cond_signal(&condvar);
 	cnt--;
 }
 
+void test_mutex(void* uc, void* arg) {
+	char *t_name = (char *) arg;
+	fprintf(stdout, "\nThread \"%s\" has been born in tid = %d!\n", t_name, (int)syscall(SYS_gettid));
+	
+	sleep(2);
+	rthread_mutex_lock(&mutex, uc);
+	fprintf(stdout, "\nThread \"%s\" get the lock in tid = %d!\n", t_name, (int)syscall(SYS_gettid));
+	cnt++;
+	rthread_yield(uc);
+	rthread_mutex_unlock(&mutex);
+	fprintf(stdout, "\nThread \"%s\" release the lock in tid = %d!\n", t_name, (int)syscall(SYS_gettid));
+}
+
+void test_mutex_1(void* uc, void* arg) {
+	char *t_name = (char *) arg;
+	fprintf(stdout, "\nThread \"%s\" has been born in tid = %d!\n", t_name, (int)syscall(SYS_gettid));
+
+	rthread_mutex_lock(&mutex, uc);
+	fprintf(stdout, "\nThread \"%s\" get the lock in tid = %d!\n", t_name, (int)syscall(SYS_gettid));
+	cnt++;
+	rthread_yield(uc);
+	rthread_mutex_unlock(&mutex);
+	fprintf(stdout, "\nThread \"%s\" release the lock in tid = %d!\n", t_name, (int)syscall(SYS_gettid));
+}
+
+void test_mutex_2(void* uc, void* arg) {
+	char *t_name = (char *) arg;
+	fprintf(stdout, "\nThread \"%s\" has been born in tid = %d!\n", t_name, (int)syscall(SYS_gettid));
+
+	rthread_mutex_lock(&mutex, uc);
+	fprintf(stdout, "\nThread \"%s\" get the lock in tid = %d!\n", t_name, (int)syscall(SYS_gettid));
+	cnt--;
+	rthread_yield(uc);
+	rthread_mutex_unlock(&mutex);
+	fprintf(stdout, "\nThread \"%s\" release the lock in tid = %d!\n", t_name, (int)syscall(SYS_gettid));
+}
 
 int main() {
 
-	rthread_t tid;
+	rthread_t ut_1, ut_2;
+	rthread_t k1, k2;
 
-	rthread_init(NULL, NULL);
-	rthread_mutex_init(&mutex, NULL);
-	rthread_cond_init(&condvar, NULL);
+	rthread_init(16);
+	rthread_mutex_init(&mutex);
+	rthread_cond_init(&condvar);
 
-	rthread_create(&tid, USER_LEVEL, &mutex_cond_demo, "1");
-	rthread_create(&tid, USER_LEVEL, &mutex_cond_demo, "2");
+	//rthread_create(&ut_1, USER_LEVEL, &test_mutex, "1");
+	//rthread_create(&ut_2, USER_LEVEL, &test_mutex, "2");
+	rthread_create(&ut_1, USER_LEVEL, &mutex_cond_demo, "1");
+	rthread_create(&ut_2, USER_LEVEL, &mutex_cond_demo, "2");
 
-	rthread_create(&tid, KERNEL_LEVEL, &k_thread_exec_func, "1");
+	rthread_create(&k1, KERNEL_LEVEL, &k_thread_exec_func, "1");
+	//rthread_create(&k2, KERNEL_LEVEL, &k_thread_exec_func, "2");
 
-   while(1) {
-      sleep(2);
-      if (cnt == 0)
-         break;
-    }
+	//sleep(13);
+	rthread_join(ut_1, NULL);
+	rthread_join(ut_2, NULL);
+
+	printf("cnt = %d\n", cnt);
 
 	return 0;
 }
