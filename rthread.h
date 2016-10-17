@@ -13,6 +13,7 @@
  * update: 10/12/2016 (Modify logic in thread creation, yield and eliminate runtime error)
  * update: 10/14/2016 (Modify logic in thread mutex and condition variable)
  * update: 10/15/2016 (Add logic in thread exit and thread join)
+ * update: 10/17/2016 (Add Round Robin Scheduler for user level threads)
 */
 
 #ifndef RTHREAD_H
@@ -20,16 +21,18 @@
 
 #define _GNU_SOURCE
 
+#define _DEBUG_
+
 #include <unistd.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
+#include <sys/time.h>
 #include <assert.h>
 #include <ucontext.h>
 #include <sched.h>
 #include <signal.h>
-#include <time.h>
 #include <semaphore.h>
 #include <string.h>
 #include <stdio.h>
@@ -70,7 +73,6 @@ typedef enum threadStatus {
 /* user_level Thread Control Block Implementation */
 typedef struct threadControlBlock {
 	rthread_t   tid;			/* Thread ID            */
-	threadLevel level;			/* Thread Level         */
 	threadStatus status;		/* Thread Status        */
 	ucontext_t context;			/* Thread Contex        */
 	void *stack;				/* Thread Stack pointer */

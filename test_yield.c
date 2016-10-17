@@ -4,7 +4,7 @@
 
 #include <sched.h>
 
-a[0xFFFF][4];
+int a[0xFFFF][4];
 
 void rth(void* uc, void* arg) {
 	char *t_name = (char *) arg;
@@ -12,7 +12,7 @@ void rth(void* uc, void* arg) {
 	int i = 0;
 	for (i = 0; i < 0xFFFF; i++) {
 		if (i == 0)
-			fprintf(stdout, "User Level Thread \"%s\" is running... in tid = %d \n", t_name, (int)syscall(SYS_gettid));
+			fprintf(stdout, "User Level Thread \"%s\" is running in tid = %d \n", t_name, (int)syscall(SYS_gettid));
 	}
 	fprintf(stdout, "User Level Thread \"%s\" pause !\n", t_name);
 	rthread_yield(uc);
@@ -20,7 +20,7 @@ void rth(void* uc, void* arg) {
 	fprintf(stdout, "User Level Thread \"%s\" resume !\n", t_name);	
 	for (i = 0; i < 0xFFFF; i++) {
 		if (i == 0)
-			fprintf(stdout, "User Level Thread \"%s\" is running... in tid = %d \n", t_name, (int)syscall(SYS_gettid));		
+			fprintf(stdout, "User Level Thread \"%s\" is running in tid = %d \n", t_name, (int)syscall(SYS_gettid));
 	}
 	fprintf(stdout, "User Level Thread \"%s\" finish !\n", t_name);	
 }
@@ -31,14 +31,14 @@ void tst(void* uc, void* arg) {
 	int i = 0;
 	for (i = 0; i < 0xFFFF; i++) {
 		if (i == 0)
-			fprintf(stdout, "User Level Thread \"%s\" is running... in tid = %d \n", t_name, (int)syscall(SYS_gettid));
+			fprintf(stdout, "User Level Thread \"%s\" is running in tid = %d \n", t_name, (int)syscall(SYS_gettid));
 	}
 	fprintf(stdout, "User Level Thread \"%s\" pause !\n", t_name);
 	sleep(1);
 	fprintf(stdout, "User Level Thread \"%s\" resume !\n", t_name);	
 	for (i = 0; i < 0xFFFF; i++) {
 		if (i == 0)
-			fprintf(stdout, "User Level Thread \"%s\" is running... in tid = %d \n", t_name, (int)syscall(SYS_gettid));		
+			fprintf(stdout, "User Level Thread \"%s\" is running in tid = %d \n", t_name, (int)syscall(SYS_gettid));
 	}		
 	fprintf(stdout, "User Level Thread \"%s\" finish !\n", t_name);
 }
@@ -47,25 +47,34 @@ void cal(void* uc, void* arg) {
 	char *t_name = (char *) arg;
 	int row = atoi(t_name) - 1;
 	int sum = 0;
-	int i = 0;
+	int i = 0, j = 0, k = 0;
 	fprintf(stdout, "User Level Thread \"%s\" start in tid = %d !\n", t_name, (int)syscall(SYS_gettid));
 	while (i < 0x7FFF) {
 		sum += a[i][row];
 		i++;
-		sleep(0.1);
+		//sleep(0.1);
+		/* Just do some thing to make it runs longer */
+		while (j < 0xFFFFFFF) {
+			j += 2;
+			j -= 1;
+		}
 	}
 	fprintf(stdout, "User Level Thread \"%s\" pause !\n", t_name);
 	rthread_yield(uc);
-	sleep(1);
+	//sleep(1);
 	fprintf(stdout, "User Level Thread \"%s\" resume in tid = %d !\n", t_name, (int)syscall(SYS_gettid));	
 	while (i < 0xFFFF) {
 		sum += a[i][row];
 		i++;
-		sleep(0.1);
+		//sleep(0.1);
+		/* Just do some thing to make it runs longer */
+		while (k < 0xFFFFFFF) {
+			k += 2;
+			k -= 1;
+		}
 	}
 	fprintf(stdout, "User Level Thread \"%s\" finish ! sum[%d] = %d\n", t_name, row, sum);
 }
-
 
 int main() {
 	rthread_t u1, u2, u3, u4;
@@ -97,9 +106,9 @@ int main() {
 	//pthread_create(&k1, NULL, &tst, "1");
 	//pthread_create(&k2, NULL, &tst, "2");
 
-	rthread_schedule();
-
 	printf("Main Thread Starts !\n");
+
+	rthread_schedule();
 
 	//sleep(5);
 	rthread_join(u1, NULL);
