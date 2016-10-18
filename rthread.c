@@ -93,9 +93,9 @@ int isQueueEmpty(Queue q)
 void rthread_init(uint size) 
 {
 	/* Initialize error log file */
-	FILE * fp;
-	fp = fopen ("rThread_err_log", "w");
-	dup2(fileno(fp), STDERR_FILENO);
+	FILE *fp;
+	fp = freopen(ERR_LOG_FILE, "w", stderr);
+	dup2(fileno(fp), fileno(stderr));
 
 	/* Initialize _thread_queue */
 	_thread_queue.size = size + 1;
@@ -189,8 +189,8 @@ int rthread_yield(void *uc)
 
 	if (RUNNING == current_tcb->status) {
 		#ifdef _DEBUG_
-		printf("yielding... !\n");
-		printf("****** status = %d ******!\n", current_tcb->status);
+			fprintf(stdout, "yielding... !\n");
+			fprintf(stdout, "****** status = %d ******!\n", current_tcb->status);
 		#endif
 
 		current_tcb->status = SUSPENDED;
@@ -245,8 +245,8 @@ static void schedule(int sig, siginfo_t *si, void *uc)
 	//sigprocmask(SIG_BLOCK, &sigProcMask, NULL);
 
 	#ifdef _DEBUG_
-	printf("times up !\n");
-	t++;
+		fprintf(stdout, "times up !\n");
+		t++;
 	#endif
 
 	while(__sync_lock_test_and_set(&_spinlock, 1));
@@ -270,29 +270,32 @@ int rthread_schedule()
 	sigaction(SIGPROF, &schedHandle, NULL);
 
 	timeQuantum.it_value.tv_sec = 0;
-	timeQuantum.it_value.tv_usec = 500000;
+	timeQuantum.it_value.tv_usec = 50000;
 	timeQuantum.it_interval.tv_sec = 0;
-	timeQuantum.it_interval.tv_usec = 500000;
+	timeQuantum.it_interval.tv_usec = 50000;
 	setitimer(ITIMER_PROF, &timeQuantum, NULL);
+
+	/* thread TCB and context */
+	ucontext_t *next_thread_uc = NULL;
+	_tcb* current_tcb = NULL;
 
 	/*  grab and run a user level thread from 
 		the user level thread queue, until no available 
         user level thread  */
-	ucontext_t *next_thread_uc = NULL;
-	_tcb* current_tcb = NULL;
+
 	while (1) {
-		//sigprocmask(SIG_BLOCK, &sigProcMask, NULL);
+		sigprocmask(SIG_BLOCK, &sigProcMask, NULL);
 		while(__sync_lock_test_and_set(&_spinlock, 1));
 		
 		if (0 != deQueue(&_thread_queue, (void**)&next_thread_uc)) {
 			ERR_LOG("Failed to grab a user level thread from the queue!");
 			__sync_lock_release(&_spinlock);
-			//sigprocmask(SIG_UNBLOCK, &sigProcMask, NULL);
+			sigprocmask(SIG_UNBLOCK, &sigProcMask, NULL);
 			break;
 		}
 		__sync_lock_release(&_spinlock);
 
-		_tcb* current_tcb = GET_TCB((ucontext_t*)next_thread_uc, _tcb, context);
+		current_tcb = GET_TCB((ucontext_t*)next_thread_uc, _tcb, context);
 		
 		/* current user thread is already terminated by rthread_exit() */
 		if (TERMINATED == current_tcb->status) {
@@ -306,7 +309,7 @@ int rthread_schedule()
 
 		current_uthread_context = (ucontext_t*)next_thread_uc;
 		swapcontext(&context_main, (ucontext_t*)next_thread_uc);
-		//sigprocmask(SIG_UNBLOCK, &sigProcMask, NULL);
+		sigprocmask(SIG_UNBLOCK, &sigProcMask, NULL);
 	}
 	return 0;
 }
@@ -322,7 +325,7 @@ void u_thread_exec_func(void (*thread_func)(void*, void*), void *arg, _tcb *newT
 	u_thread->status = FINISHED;
 	/* When this thread finished, delete TCB and yield CPU control */
 	#ifdef _DEBUG_
-	printf(" t = %d\n", t);
+		fprintf(stdout, " t = %d\n", t);
 	#endif
 	free(u_thread->stack);
 	free(u_thread);
@@ -353,7 +356,7 @@ TAS:	while(__sync_lock_test_and_set(&_spinlock, 1));
 		}
 		__sync_lock_release(&_spinlock);
 
-		_tcb* current_tcb = GET_TCB((ucontext_t*)next_thread_uc, _tcb, context);
+		current_tcb = GET_TCB((ucontext_t*)next_thread_uc, _tcb, context);
 		
 		/* current user thread is already terminated by rthread_exit() */
 		if (TERMINATED == current_tcb->status) {

@@ -46,6 +46,8 @@
 
 #define THREAD_MAX 16
 
+#define ERR_LOG_FILE "rThread_err_log"
+
 #define ERR_LOG(string) fprintf(stderr, "rThread: " string "\n")
 
 #define GET_TCB(uc_ptr, tcb, ctx) \
@@ -89,6 +91,24 @@ typedef struct Queue {
 	int rear;
 } Queue;
 
+/* mutex struct definition */
+typedef struct rthread_mutex_t {
+	_tcb *owner;
+	uint lock;
+	Queue wait_list;
+} rthread_mutex_t;
+
+/* condition variable struct definition */
+typedef struct rthread_cond_t {
+	Queue wait_list;
+	rthread_mutex_t list_mutex;
+} rthread_cond_t;
+
+
+/*********************************************************
+                    Queue ADT Operation
+**********************************************************/
+
 int enQueue(Queue *q, void *element);
 
 int deQueue(Queue *q, void **element);
@@ -129,12 +149,6 @@ void k_thread_exec_func(void *arg, void *reserved);
 /*********************************************************
 				Mutual Exclusive Lock
 **********************************************************/
-/* mutex struct definition */
-typedef struct rthread_mutex_t {
-	_tcb *owner;
-	uint lock;
-	Queue wait_list;
-} rthread_mutex_t;
 
 /* initial the mutex lock */
 int rthread_mutex_init(rthread_mutex_t *mutex);
@@ -149,11 +163,6 @@ int rthread_mutex_unlock(rthread_mutex_t *mutex);
 /*********************************************************
 					Condition Variable
 **********************************************************/
-/* condition variable struct definition */
-typedef struct rthread_cond_t {
-	Queue wait_list;
-	rthread_mutex_t list_mutex;
-} rthread_cond_t;
 
 /* initial condition variable */
 int rthread_cond_init(rthread_cond_t *condvar);
