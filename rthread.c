@@ -14,6 +14,7 @@
  * update: 10/14/2016 (Modify logic in thread mutex and condition variable)
  * update: 10/15/2016 (Add logic in thread exit and thread join)
  * update: 10/17/2016 (Add Round Robin Scheduler for user level threads)
+ * update: 11/06/2016 (Add rthread_mutex_destory() and rthread_cond_destory())
 */
 
 #include "rthread.h"
@@ -421,6 +422,16 @@ int rthread_mutex_unlock(rthread_mutex_t *mutex)
 	return 0;
 }
 
+/* destory the mutex lock */
+int rthread_mutex_destory(rthread_mutex_t *mutex)
+{
+	if (0 == mutex->lock){
+		free(mutex->wait_list.queue);
+		return 0;
+	}
+	return -1;	
+}
+
 /*********************************************************
 					Condition Variable
 **********************************************************/
@@ -471,6 +482,13 @@ int rthread_cond_wait(rthread_cond_t* condvar, rthread_mutex_t *mutex, void *arg
 	swapcontext((ucontext_t*)current_thread_context, &context_main);
 	rthread_mutex_lock(mutex, current_thread_context);
 	return 0;
+}
+
+/* destory condition variable */
+int rthread_cond_destory(rthread_cond_t *condvar)
+{
+	free(condvar->wait_list.queue);
+	return 0;	
 }
 
 /* -------------------------- end of rthread.c -------------------------- */
