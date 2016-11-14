@@ -105,7 +105,12 @@ void rthread_init(uint size)
 	memset(_thread_queue.queue, 0, _thread_queue.size*sizeof(void*));
 	_thread_queue.head = 0;
 	_thread_queue.rear = 0;
-
+	
+	/* Initialize time quantum */
+	timeQuantum.it_value.tv_sec = 0;
+	timeQuantum.it_value.tv_usec = TIME_QUANTUM;
+	timeQuantum.it_interval.tv_sec = 0;
+	timeQuantum.it_interval.tv_usec = TIME_QUANTUM;
 }
 
 /* create a new thread according to thread level */
@@ -268,10 +273,6 @@ int rthread_schedule()
 	schedHandle.sa_handler = &schedule;
 	sigaction(SIGPROF, &schedHandle, NULL);
 
-	timeQuantum.it_value.tv_sec = 0;
-	timeQuantum.it_value.tv_usec = 50000;
-	timeQuantum.it_interval.tv_sec = 0;
-	timeQuantum.it_interval.tv_usec = 50000;
 	setitimer(ITIMER_PROF, &timeQuantum, NULL);
 
 	uint k_tid = (uint)syscall(SYS_gettid);
@@ -306,6 +307,7 @@ int rthread_schedule()
 			continue;
 		}
 
+		current_tcb->status = RUNNING;
 		current_uthread_context[k_tid & K_CONTEXT_MASK] = (ucontext_t*)next_thread_uc;
 		swapcontext(&context_main[k_tid & K_CONTEXT_MASK], (ucontext_t*)next_thread_uc);
 	}
@@ -333,8 +335,6 @@ void u_thread_exec_func(void (*thread_func)(void*), void *arg, _tcb *newThread)
 		fprintf(stdout, " t = %d\n", t);
 	#endif
 
-	_user_thread_num--;
-
 	while(__sync_lock_test_and_set(&_spinlock, 1));
 	enQueue(&_thread_queue, current_uthread_context[k_tid & K_CONTEXT_MASK]);	
 	__sync_lock_release(&_spinlock);
@@ -360,10 +360,6 @@ void k_thread_exec_func(void *arg)
 	schedHandle.sa_handler = &schedule;
 	sigaction(SIGPROF, &schedHandle, NULL);
 
-	timeQuantum.it_value.tv_sec = 0;
-	timeQuantum.it_value.tv_usec = 50000;
-	timeQuantum.it_interval.tv_sec = 0;
-	timeQuantum.it_interval.tv_usec = 50000;
 	setitimer(ITIMER_PROF, &timeQuantum, NULL);
 
 	/*  grab and run a user level thread from 
@@ -392,6 +388,7 @@ TAS:	while(__sync_lock_test_and_set(&_spinlock, 1));
 			continue;
 		}
 
+		current_tcb->status = RUNNING;
 		current_uthread_context[k_tid & K_CONTEXT_MASK] = (ucontext_t*)next_thread_uc;
 		swapcontext(&context_main[k_tid & K_CONTEXT_MASK], (ucontext_t*)next_thread_uc);
 	}
@@ -424,7 +421,7 @@ int rthread_mutex_lock(rthread_mutex_t *mutex)
 	/* Use "test-and-set" atomic operation to aquire the mutex lock */
 	while (__sync_lock_test_and_set(&mutex->lock, 1)) {
 		enQueue(&mutex->wait_list, current_uthread_context[k_tid & K_CONTEXT_MASK]);
-		swapcontext(current_uthread_context[k_tid & K_CONTEXT_MASK], &context_main);
+		swapcontext(current_uthread_context[k_tid & K_CONTEXT_MASK], &context_main[k_tid & K_CONTEXT_MASK]);
 	}
 	mutex->owner = GET_TCB(current_uthread_context[k_tid & K_CONTEXT_MASK], _tcb, context);
 	return 0;
@@ -466,6 +463,7 @@ int rthread_cond_init(rthread_cond_t *condvar)
 	condvar->wait_list.size = U_THREAD_MAX;
 	condvar->wait_list.queue = (void**)malloc(condvar->wait_list.size*sizeof(void*));
 	assert (condvar->wait_list.queue);
+
 	memset(condvar->wait_list.queue, 0, condvar->wait_list.size*sizeof(void*));
 	condvar->wait_list.head = 0;
 	condvar->wait_list.rear = 0;
@@ -482,6 +480,7 @@ int rthread_cond_broadcast(rthread_cond_t *condvar)
 		enQueue(&_thread_queue, next_thread_context);	
 		__sync_lock_release(&_spinlock);
 	}
+
 	return 0;
 }
 
@@ -492,9 +491,11 @@ int rthread_cond_signal(rthread_cond_t *condvar)
 	if (0 != deQueue(&condvar->wait_list, &next_thread_context)) {
 		return 0;
 	}
+
 	while(__sync_lock_test_and_set(&_spinlock, 1));
 	enQueue(&_thread_queue, next_thread_context);	
 	__sync_lock_release(&_spinlock);
+
 	return 0;
 }
 
@@ -505,6 +506,7 @@ int rthread_cond_wait(rthread_cond_t* condvar, rthread_mutex_t *mutex)
 
 	ucontext_t *current_thread_context = current_uthread_context[k_tid & K_CONTEXT_MASK];
 	enQueue(&condvar->wait_list, current_thread_context);
+
 	rthread_mutex_unlock(mutex);
 	swapcontext((ucontext_t*)current_thread_context, &context_main[k_tid & K_CONTEXT_MASK]);
 	rthread_mutex_lock(mutex);

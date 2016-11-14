@@ -52,6 +52,8 @@
 
 #define K_CONTEXT_MASK 0b11
 
+#define TIME_QUANTUM 50000
+
 #define ERR_LOG_FILE "rThread_err_log"
 
 #define ERR_LOG(string) fprintf(stderr, "rThread: " string "\n")
