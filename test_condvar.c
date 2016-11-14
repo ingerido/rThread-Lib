@@ -6,7 +6,7 @@ rthread_cond_t    condvar;
 
 int cnt = 0;
 
-void mutex_cond_demo(void* uc, void* arg) {
+void mutex_cond_demo(void* arg) {
 	cnt++;
 	char *t_name = (char *) arg;
 	int count = 0;
@@ -14,7 +14,7 @@ void mutex_cond_demo(void* uc, void* arg) {
 	fprintf(stdout, "\nThread \"%s\" has been born!\n\n", t_name);
 
 	// grab the mutex lock
-	rthread_mutex_lock(&mutex, uc);			
+	rthread_mutex_lock(&mutex);			
 
 	// spin 5 times
 	while(count++ < 5) {
@@ -22,7 +22,7 @@ void mutex_cond_demo(void* uc, void* arg) {
 	
 		rthread_cond_signal(&condvar);
 
-		rthread_cond_wait(&condvar, &mutex, uc);
+		rthread_cond_wait(&condvar, &mutex);
 		sleep(1);
 	}
 
@@ -34,15 +34,15 @@ void mutex_cond_demo(void* uc, void* arg) {
 	cnt--;
 }
 
-void test_mutex(void* uc, void* arg) {
+void test_mutex(void* arg) {
 	char *t_name = (char *) arg;
 	fprintf(stdout, "\nThread \"%s\" has been born in tid = %d!\n", t_name, (int)syscall(SYS_gettid));
 	
 	sleep(2);
-	rthread_mutex_lock(&mutex, uc);
+	rthread_mutex_lock(&mutex);
 	fprintf(stdout, "\nThread \"%s\" get the lock in tid = %d!\n", t_name, (int)syscall(SYS_gettid));
 	cnt++;
-	rthread_yield(uc);
+	rthread_yield();
 	rthread_mutex_unlock(&mutex);
 	fprintf(stdout, "\nThread \"%s\" release the lock in tid = %d!\n", t_name, (int)syscall(SYS_gettid));
 }

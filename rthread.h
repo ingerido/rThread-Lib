@@ -15,6 +15,7 @@
  * update: 10/15/2016 (Add logic in thread exit and thread join)
  * update: 10/17/2016 (Add Round Robin Scheduler for user level threads)
  * update: 11/06/2016 (Add rthread_mutex_destory() and rthread_cond_destory())
+ * update: 11/13/2016 (Fix segmentation fault bugs and correct the logic in context switch)
 */
 
 #ifndef RTHREAD_H
@@ -45,7 +46,11 @@
 
 #define _THREAD_STACK 1024*32
 
-#define THREAD_MAX 16
+#define U_THREAD_MAX 16
+
+#define K_THREAD_MAX 4
+
+#define K_CONTEXT_MASK 0b11
 
 #define ERR_LOG_FILE "rThread_err_log"
 
@@ -125,26 +130,26 @@ void rthread_init(uint size);
 /* create a new thread according to thread level */
 int rthread_create(rthread_t *tid,
                    threadLevel level,
-                   void (*start_func)(void*, void*),
+                   void (*start_func)(void*),
                    void *arg);
 
 /* give CPU pocession to other user level threads voluntarily */
-int rthread_yield(void *context);
+int rthread_yield();
 
 /* wait for thread termination */
 int rthread_join(rthread_t thread, void **value_ptr);
 
 /* terminate a thread */
-void rthread_exit(void *tcb, void *retval);
+void rthread_exit(void *retval);
 
 /* schedule user level threads */
 int rthread_schedule();
 
 /* start user level thread wrapper function */
-void u_thread_exec_func(void (*thread_func)(void*, void*), void *arg, _tcb *newThread);
+void u_thread_exec_func(void (*thread_func)(void*), void *arg, _tcb *newThread);
 
 /* run kernel level thread function */
-void k_thread_exec_func(void *arg, void *reserved);
+void k_thread_exec_func(void *arg);
 
 
 /*********************************************************
@@ -155,7 +160,7 @@ void k_thread_exec_func(void *arg, void *reserved);
 int rthread_mutex_init(rthread_mutex_t *mutex);
 
 /* aquire the mutex lock */
-int rthread_mutex_lock(rthread_mutex_t *mutex, void *arg);
+int rthread_mutex_lock(rthread_mutex_t *mutex);
 
 /* release the mutex lock */
 int rthread_mutex_unlock(rthread_mutex_t *mutex);
@@ -177,7 +182,7 @@ int rthread_cond_broadcast(rthread_cond_t *condvar);
 int rthread_cond_signal(rthread_cond_t *condvar);
 
 /* current thread go to sleep until other thread wakes it up*/
-int rthread_cond_wait(rthread_cond_t *condvar, rthread_mutex_t *mutex, void *arg);
+int rthread_cond_wait(rthread_cond_t *condvar, rthread_mutex_t *mutex);
 
 /* destory condition variable */
 int rthread_cond_destory(rthread_cond_t *condvar);

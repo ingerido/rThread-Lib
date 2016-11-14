@@ -6,7 +6,7 @@
 
 int a[0xFFFF][4];
 
-void test_yield(void* uc, void* arg) {
+void test_yield(void* arg) {
 	char *t_name = (char *) arg;
 	fprintf(stdout, "User Level Thread \"%s\" start !\n", t_name);	
 	int i = 0;
@@ -15,7 +15,7 @@ void test_yield(void* uc, void* arg) {
 			fprintf(stdout, "User Level Thread \"%s\" is running in tid = %d \n", t_name, (int)syscall(SYS_gettid));
 	}
 	fprintf(stdout, "User Level Thread \"%s\" pause !\n", t_name);
-	rthread_yield(uc);
+	rthread_yield();
 	sleep(1);
 	fprintf(stdout, "User Level Thread \"%s\" resume !\n", t_name);	
 	for (i = 0; i < 0xFFFF; i++) {
@@ -25,7 +25,7 @@ void test_yield(void* uc, void* arg) {
 	fprintf(stdout, "User Level Thread \"%s\" finish !\n", t_name);	
 }
 
-void test_roundrobin(void* uc, void* arg) {
+void test_roundrobin(void* arg) {
 	char *t_name = (char *) arg;
 	fprintf(stdout, "User Level Thread \"%s\" start !\n", t_name);	
 	int i = 0, j = 0, k = 0;
@@ -40,7 +40,7 @@ void test_roundrobin(void* uc, void* arg) {
 	}
 	fprintf(stdout, "User Level Thread \"%s\" pause !\n", t_name);
 	sleep(1);
-	//rthread_exit(uc, &i);
+	//rthread_exit(&i);
 	fprintf(stdout, "User Level Thread \"%s\" resume !\n", t_name);	
 	for (i = 0; i < 0xFFFF; i++) {
 		/* Just do some thing to make it runs longer */
@@ -52,10 +52,10 @@ void test_roundrobin(void* uc, void* arg) {
 		}
 	}		
 	fprintf(stdout, "User Level Thread \"%s\" finish !\n", t_name);
-	rthread_exit(uc, &i);
+	rthread_exit(&i);
 }
 
-void parallel_calculate(void* uc, void* arg) {
+void parallel_calculate(void* arg) {
 	char *t_name = (char *) arg;
 	int row = atoi(t_name) - 1;
 	int sum = 0;
@@ -108,10 +108,12 @@ int main() {
 
 	fprintf(stdout, "Main Thread Starts !\n");
 
-	//rthread_create(&k1, KERNEL_LEVEL, &k_thread_exec_func, "1");
-	//rthread_create(&k2, KERNEL_LEVEL, &k_thread_exec_func, "2");	
+	rthread_create(&k1, KERNEL_LEVEL, &k_thread_exec_func, "1");
+	rthread_create(&k2, KERNEL_LEVEL, &k_thread_exec_func, "2");	
+	//rthread_create(&k3, KERNEL_LEVEL, &k_thread_exec_func, "3");
+	//rthread_create(&k4, KERNEL_LEVEL, &k_thread_exec_func, "4");
 
-	rthread_schedule();
+	//rthread_schedule();
 
 	//rthread_join(u1, &tmp);
 	rthread_join(u1, NULL);

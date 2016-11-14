@@ -15,6 +15,7 @@
  * update: 10/15/2016 (Add logic in thread exit and thread join)
  * update: 10/17/2016 (Add Round Robin Scheduler for user level threads)
  * update: 11/06/2016 (Add rthread_mutex_destory() and rthread_cond_destory())
+ * update: 11/13/2016 (Fix segmentation fault bugs and correct the logic in context switch)
 */
 
 #include "rthread.h"
@@ -23,10 +24,10 @@
 static Queue _thread_queue;
 
 /* current user level Thread context (for user level thread only !) */
-static ucontext_t *current_uthread_context;
+static ucontext_t *current_uthread_context[K_THREAD_MAX];
 
 /* kernel thread context */
-static ucontext_t context_main;
+static ucontext_t context_main[K_THREAD_MAX];
 
 /* number of active kernel threads */
 static int _kernel_thread_num = 0;
@@ -38,14 +39,13 @@ static int _user_thread_num = 0;
 static uint _spinlock = 0;
 
 /* global semaphore for user level thread */
-static sig_semaphore sigsem_thread[THREAD_MAX];
+static sig_semaphore sigsem_thread[U_THREAD_MAX];
 
 /* timer and signal for user level thread scheduling */
 static struct sigaction schedHandle;
 
 static struct itimerval timeQuantum;
 
-static sigset_t sigProcMask;
 
 /* For debugging */
 static int t = 0;
@@ -111,11 +111,11 @@ void rthread_init(uint size)
 /* create a new thread according to thread level */
 int rthread_create(rthread_t *tid,
                    threadLevel level,
-                   void (*start_func)(void*, void*),
+                   void (*start_func)(void*),
                    void *arg) 
 {
 	if (USER_LEVEL == level) {
-		if (_user_thread_num == THREAD_MAX) {
+		if (_user_thread_num == U_THREAD_MAX) {
 			/* exceed ceiling limit of user lever threads */
 			ERR_LOG("User level threads limit exceeded!");
 			return -1;
@@ -146,7 +146,7 @@ int rthread_create(rthread_t *tid,
 		}
 
 		/* set the context to a newly allocated stack */
-		newThread->context.uc_link = &context_main;
+		newThread->context.uc_link = &context_main[0];
 		newThread->context.uc_stack.ss_sp = newThread->stack;
 		newThread->context.uc_stack.ss_size = _THREAD_STACK;
 		newThread->context.uc_stack.ss_flags = 0;	
@@ -183,9 +183,10 @@ int rthread_create(rthread_t *tid,
 }
 
 /* give CPU pocession to other user level threads voluntarily */
-int rthread_yield(void *uc) 
+int rthread_yield() 
 {
-	_tcb* current_tcb = GET_TCB(uc, _tcb, context);
+	uint k_tid = (uint)syscall(SYS_gettid);
+	_tcb* current_tcb = GET_TCB(current_uthread_context[k_tid & K_CONTEXT_MASK], _tcb, context);
 	while(__sync_lock_test_and_set(&_spinlock, 1));
 
 	if (RUNNING == current_tcb->status) {
@@ -195,10 +196,10 @@ int rthread_yield(void *uc)
 		#endif
 
 		current_tcb->status = SUSPENDED;
-		enQueue(&_thread_queue, uc);
+		enQueue(&_thread_queue, current_uthread_context[k_tid & K_CONTEXT_MASK]);
 		__sync_lock_release(&_spinlock);
 		
-		swapcontext((ucontext_t*)uc, &context_main);
+		swapcontext(current_uthread_context[k_tid & K_CONTEXT_MASK], &context_main[k_tid & K_CONTEXT_MASK]);
 	} else
 		__sync_lock_release(&_spinlock);
 	return 0;
@@ -216,9 +217,10 @@ int rthread_join(rthread_t thread, void **value_ptr)
 }
 
 /* terminate a thread */
-void rthread_exit(void *uc, void *retval) 
+void rthread_exit(void *retval) 
 {
-	_tcb* current_tcb = GET_TCB((ucontext_t*)uc, _tcb, context);
+	uint k_tid = (uint)syscall(SYS_gettid);
+	_tcb* current_tcb = GET_TCB(current_uthread_context[k_tid & K_CONTEXT_MASK], _tcb, context);
 	rthread_t current_id = current_tcb->tid;
 
 	current_tcb->status = TERMINATED;
@@ -230,10 +232,10 @@ void rthread_exit(void *uc, void *retval)
 	memcpy(sigsem_thread[current_id].val, retval, sizeof(unsigned long));
 
 	while(__sync_lock_test_and_set(&_spinlock, 1));
-	enQueue(&_thread_queue, uc);	
+	enQueue(&_thread_queue, current_uthread_context[k_tid & K_CONTEXT_MASK]);	
 	__sync_lock_release(&_spinlock);
 
-	swapcontext((ucontext_t*)uc, &context_main);
+	swapcontext(current_uthread_context[k_tid & K_CONTEXT_MASK], &context_main[k_tid & K_CONTEXT_MASK]);
 }
 
 /* schedule the user level threads */
@@ -242,27 +244,115 @@ static void schedule(int sig, siginfo_t *si, void *uc)
 	/* Note: calling printf() from a signal handler is not
 	  strictly correct, since printf() is not async-signal-safe;
 	  see signal(7) */
-
-	//sigprocmask(SIG_BLOCK, &sigProcMask, NULL);
-
+	
+	uint k_tid = (uint)syscall(SYS_gettid);
+	
 	#ifdef _DEBUG_
 		fprintf(stdout, "times up !\n");
 		t++;
 	#endif
 
 	while(__sync_lock_test_and_set(&_spinlock, 1));
-	enQueue(&_thread_queue, (void*)current_uthread_context);
+	enQueue(&_thread_queue, (void*)current_uthread_context[k_tid & K_CONTEXT_MASK]);
 	__sync_lock_release(&_spinlock);
 	
-	swapcontext(current_uthread_context, &context_main);
-	//sigprocmask(SIG_UNBLOCK, &sigProcMask, NULL);
+	swapcontext(current_uthread_context[k_tid & K_CONTEXT_MASK], &context_main[k_tid & K_CONTEXT_MASK]);
+
 }
 
 int rthread_schedule() 
 {
-	/* Set Signal Mask */
-	sigemptyset(&sigProcMask);
-	sigaddset(&sigProcMask, SIGPROF);
+	/* Set Signal Handler to Call Scheduler */
+	memset(&schedHandle, 0, sizeof(schedHandle));
+	schedHandle.sa_flags = SA_SIGINFO;
+	schedHandle.sa_handler = &schedule;
+	sigaction(SIGPROF, &schedHandle, NULL);
+
+	timeQuantum.it_value.tv_sec = 0;
+	timeQuantum.it_value.tv_usec = 50000;
+	timeQuantum.it_interval.tv_sec = 0;
+	timeQuantum.it_interval.tv_usec = 50000;
+	setitimer(ITIMER_PROF, &timeQuantum, NULL);
+
+	uint k_tid = (uint)syscall(SYS_gettid);
+
+	/* thread TCB and context */
+	ucontext_t *next_thread_uc = NULL;
+	_tcb* current_tcb = NULL;
+
+	/*  grab and run a user level thread from 
+		the user level thread queue, until no available 
+        user level thread  */
+
+	while (1) {
+		while(__sync_lock_test_and_set(&_spinlock, 1));
+		
+		if (0 != deQueue(&_thread_queue, (void**)&next_thread_uc)) {
+			ERR_LOG("Failed to grab a user level thread from the queue!");
+			__sync_lock_release(&_spinlock);
+			break;
+		}
+		__sync_lock_release(&_spinlock);
+
+		current_tcb = GET_TCB((ucontext_t*)next_thread_uc, _tcb, context);
+		
+		/* current user thread is already terminated or finished by rthread_exit() */
+		if (TERMINATED == current_tcb->status || FINISHED == current_tcb->status) {
+			/* do V() in thread semaphore implies current user level thread is done */
+			sem_post(&(sigsem_thread[current_tcb->tid].semaphore));
+			free(current_tcb->stack);
+			free(current_tcb);
+			_user_thread_num--;
+			continue;
+		}
+
+		current_uthread_context[k_tid & K_CONTEXT_MASK] = (ucontext_t*)next_thread_uc;
+		swapcontext(&context_main[k_tid & K_CONTEXT_MASK], (ucontext_t*)next_thread_uc);
+	}
+	return 0;
+}
+
+/* start user level thread wrapper function */
+void u_thread_exec_func(void (*thread_func)(void*), void *arg, _tcb *newThread) 
+{
+	uint k_tid = 0;
+
+	_tcb *u_thread = newThread;
+	rthread_t current_id = u_thread->tid;
+
+	u_thread->status = RUNNING;
+	thread_func(arg);
+	u_thread->status = FINISHED;
+
+	k_tid = (uint)syscall(SYS_gettid);
+
+	u_thread->context.uc_link = &context_main[k_tid & K_CONTEXT_MASK];
+
+	/* When this thread finished, delete TCB and yield CPU control */
+	#ifdef _DEBUG_
+		fprintf(stdout, " t = %d\n", t);
+	#endif
+
+	_user_thread_num--;
+
+	while(__sync_lock_test_and_set(&_spinlock, 1));
+	enQueue(&_thread_queue, current_uthread_context[k_tid & K_CONTEXT_MASK]);	
+	__sync_lock_release(&_spinlock);
+
+	swapcontext(current_uthread_context[k_tid & K_CONTEXT_MASK], &context_main[k_tid & K_CONTEXT_MASK]);
+
+}
+
+/* run kernel level thread function */
+void k_thread_exec_func(void *arg) 
+{
+	uint k_tid = (uint)syscall(SYS_gettid);
+
+	char *t_name = (char*) arg;
+	ucontext_t *next_thread_uc = NULL;
+	_tcb* current_tcb = NULL;
+
+	fprintf(stdout, "I'm Kernel Level Thread \"%s\"  tid = %d \n", t_name, k_tid);
 
 	/* Set Signal Handler to Call Scheduler */
 	memset(&schedHandle, 0, sizeof(schedHandle));
@@ -276,74 +366,6 @@ int rthread_schedule()
 	timeQuantum.it_interval.tv_usec = 50000;
 	setitimer(ITIMER_PROF, &timeQuantum, NULL);
 
-	/* thread TCB and context */
-	ucontext_t *next_thread_uc = NULL;
-	_tcb* current_tcb = NULL;
-
-	/*  grab and run a user level thread from 
-		the user level thread queue, until no available 
-        user level thread  */
-
-	while (1) {
-		sigprocmask(SIG_BLOCK, &sigProcMask, NULL);
-		while(__sync_lock_test_and_set(&_spinlock, 1));
-		
-		if (0 != deQueue(&_thread_queue, (void**)&next_thread_uc)) {
-			ERR_LOG("Failed to grab a user level thread from the queue!");
-			__sync_lock_release(&_spinlock);
-			sigprocmask(SIG_UNBLOCK, &sigProcMask, NULL);
-			break;
-		}
-		__sync_lock_release(&_spinlock);
-
-		current_tcb = GET_TCB((ucontext_t*)next_thread_uc, _tcb, context);
-		
-		/* current user thread is already terminated by rthread_exit() */
-		if (TERMINATED == current_tcb->status) {
-			/* do V() in thread semaphore implies current user level thread is done */
-			sem_post(&(sigsem_thread[current_tcb->tid].semaphore));
-			free(current_tcb->stack);
-			free(current_tcb);
-			_user_thread_num--;
-			continue;
-		}
-
-		current_uthread_context = (ucontext_t*)next_thread_uc;
-		swapcontext(&context_main, (ucontext_t*)next_thread_uc);
-		sigprocmask(SIG_UNBLOCK, &sigProcMask, NULL);
-	}
-	return 0;
-}
-
-/* start user level thread wrapper function */
-void u_thread_exec_func(void (*thread_func)(void*, void*), void *arg, _tcb *newThread) 
-{
-	_tcb *u_thread = newThread;
-	rthread_t current_id = u_thread->tid;
-
-	u_thread->status = RUNNING;
-	thread_func((void*)&u_thread->context, arg);
-	u_thread->status = FINISHED;
-	/* When this thread finished, delete TCB and yield CPU control */
-	#ifdef _DEBUG_
-		fprintf(stdout, " t = %d\n", t);
-	#endif
-	free(u_thread->stack);
-	free(u_thread);
-	_user_thread_num--;
-	/* do V() in thread semaphore implies current user level thread is done */
-	sem_post(&(sigsem_thread[current_id].semaphore));
-}
-
-/* run kernel level thread function */
-void k_thread_exec_func(void *arg, void *reserved) 
-{
-	char *t_name = (char*) arg;
-	ucontext_t *next_thread_uc = NULL;
-	_tcb* current_tcb = NULL;
-
-	fprintf(stdout, "I'm Kernel Level Thread \"%s\"  tid = %d \n", t_name, (int)syscall(SYS_gettid));
-	
 	/*  grab and run a user level thread from 
 		the user level thread queue, until no available 
         user level thread  */
@@ -353,14 +375,15 @@ TAS:	while(__sync_lock_test_and_set(&_spinlock, 1));
 		if (0 != deQueue(&_thread_queue, (void**)&next_thread_uc)) {
 			__sync_lock_release(&_spinlock);
 			//goto TAS;
-			exit(0);
+			//exit(0);
+			return;
 		}
 		__sync_lock_release(&_spinlock);
 
 		current_tcb = GET_TCB((ucontext_t*)next_thread_uc, _tcb, context);
 		
-		/* current user thread is already terminated by rthread_exit() */
-		if (TERMINATED == current_tcb->status) {
+		/* current user thread is already terminated or finished by rthread_exit() */
+		if (TERMINATED == current_tcb->status || FINISHED == current_tcb->status) {
 			/* do V() in thread semaphore implies current user level thread is done */
 			sem_post(&(sigsem_thread[current_tcb->tid].semaphore));
 			free(current_tcb->stack);
@@ -369,7 +392,8 @@ TAS:	while(__sync_lock_test_and_set(&_spinlock, 1));
 			continue;
 		}
 
-		swapcontext(&context_main, (ucontext_t*)next_thread_uc);
+		current_uthread_context[k_tid & K_CONTEXT_MASK] = (ucontext_t*)next_thread_uc;
+		swapcontext(&context_main[k_tid & K_CONTEXT_MASK], (ucontext_t*)next_thread_uc);
 	}
 }
 
@@ -394,14 +418,15 @@ int rthread_mutex_init(rthread_mutex_t *mutex)
 }
 
 /* aquire the mutex lock */
-int rthread_mutex_lock(rthread_mutex_t *mutex, void *arg) 
+int rthread_mutex_lock(rthread_mutex_t *mutex) 
 {
+	uint k_tid = (uint)syscall(SYS_gettid);
 	/* Use "test-and-set" atomic operation to aquire the mutex lock */
 	while (__sync_lock_test_and_set(&mutex->lock, 1)) {
-		enQueue(&mutex->wait_list, arg);
-		swapcontext((ucontext_t*)arg, &context_main);
+		enQueue(&mutex->wait_list, current_uthread_context[k_tid & K_CONTEXT_MASK]);
+		swapcontext(current_uthread_context[k_tid & K_CONTEXT_MASK], &context_main);
 	}
-	mutex->owner = GET_TCB(arg, _tcb, context);
+	mutex->owner = GET_TCB(current_uthread_context[k_tid & K_CONTEXT_MASK], _tcb, context);
 	return 0;
 }
 
@@ -438,7 +463,7 @@ int rthread_mutex_destory(rthread_mutex_t *mutex)
 /* initial condition variable */
 int rthread_cond_init(rthread_cond_t *condvar) 
 {
-	condvar->wait_list.size = THREAD_MAX;
+	condvar->wait_list.size = U_THREAD_MAX;
 	condvar->wait_list.queue = (void**)malloc(condvar->wait_list.size*sizeof(void*));
 	assert (condvar->wait_list.queue);
 	memset(condvar->wait_list.queue, 0, condvar->wait_list.size*sizeof(void*));
@@ -474,13 +499,15 @@ int rthread_cond_signal(rthread_cond_t *condvar)
 }
 
 /* current thread go to sleep until other thread wakes it up */
-int rthread_cond_wait(rthread_cond_t* condvar, rthread_mutex_t *mutex, void *arg) 
+int rthread_cond_wait(rthread_cond_t* condvar, rthread_mutex_t *mutex) 
 {
-	void *current_thread_context = arg;
+	uint k_tid = (uint)syscall(SYS_gettid);
+
+	ucontext_t *current_thread_context = current_uthread_context[k_tid & K_CONTEXT_MASK];
 	enQueue(&condvar->wait_list, current_thread_context);
 	rthread_mutex_unlock(mutex);
-	swapcontext((ucontext_t*)current_thread_context, &context_main);
-	rthread_mutex_lock(mutex, current_thread_context);
+	swapcontext((ucontext_t*)current_thread_context, &context_main[k_tid & K_CONTEXT_MASK]);
+	rthread_mutex_lock(mutex);
 	return 0;
 }
 
