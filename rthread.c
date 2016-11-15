@@ -91,7 +91,7 @@ int isQueueEmpty(Queue q)
 **********************************************************/
 
 /* initial rThread User level Package */
-void rthread_init(uint size) 
+void rthread_init() 
 {
 	/* Initialize error log file */
 	FILE *fp;
@@ -99,7 +99,7 @@ void rthread_init(uint size)
 	dup2(fileno(fp), fileno(stderr));
 
 	/* Initialize _thread_queue */
-	_thread_queue.size = size + 1;
+	_thread_queue.size = U_THREAD_MAX + 1;
 	_thread_queue.queue = (void**)malloc(_thread_queue.size*sizeof(void*));
 	assert (_thread_queue.queue);
 	memset(_thread_queue.queue, 0, _thread_queue.size*sizeof(void*));
@@ -244,7 +244,7 @@ void rthread_exit(void *retval)
 }
 
 /* schedule the user level threads */
-static void schedule(int sig, siginfo_t *si, void *uc)
+static void schedule()
 {
 	/* Note: calling printf() from a signal handler is not
 	  strictly correct, since printf() is not async-signal-safe;
@@ -407,6 +407,7 @@ int rthread_mutex_init(rthread_mutex_t *mutex)
 	mutex->wait_list.size = 16;
 	mutex->wait_list.queue = (void**)malloc(mutex->wait_list.size*sizeof(void*));
 	assert (mutex->wait_list.queue);
+
 	memset(mutex->wait_list.queue, 0, mutex->wait_list.size*sizeof(void*));
 	mutex->wait_list.head = 0;
 	mutex->wait_list.rear = 0;

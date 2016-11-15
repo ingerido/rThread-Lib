@@ -127,7 +127,7 @@ int isQueueEmpty(Queue q);
                     rThread Operation
 **********************************************************/
 /* initial rThread User level Package */
-void rthread_init(uint size);
+void rthread_init();
 
 /* create a new thread according to thread level */
 int rthread_create(rthread_t *tid,
