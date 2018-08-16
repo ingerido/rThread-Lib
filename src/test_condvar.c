@@ -67,8 +67,8 @@ int main() {
 	rthread_join(ut_1, NULL);
 	rthread_join(ut_2, NULL);
 
-	rthread_cond_destory(&condvar);
-	rthread_mutex_destory(&mutex);
+	rthread_cond_destroy(&condvar);
+	rthread_mutex_destroy(&mutex);
 
 	printf("cnt = %d\n", cnt);
 

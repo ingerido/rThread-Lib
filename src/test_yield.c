@@ -4,7 +4,7 @@
 
 #include <sched.h>
 
-int a[0xFFFF][4];
+int a[0xFFFF][8];
 
 void test_yield(void* arg) {
 	char *t_name = (char *) arg;
@@ -90,13 +90,13 @@ void parallel_calculate(void* arg) {
 }
 
 int main() {
-	rthread_t u1, u2, u3, u4;
+	rthread_t u1, u2, u3, u4, u5, u6, u7, u8;
 	rthread_t k1, k2, k3, k4;
 
 	int *tmp;
 
 	for (int j = 0; j < 0xFFFF; j++)
-		for (int i = 0; i < 4; i++)
+		for (int i = 0; i < 8; i++)
 			a[j][i] = i;
 
 	rthread_init(16);
@@ -105,6 +105,10 @@ int main() {
 	rthread_create(&u2, USER_LEVEL, &parallel_calculate, "2");
 	rthread_create(&u3, USER_LEVEL, &parallel_calculate, "3");
 	rthread_create(&u4, USER_LEVEL, &parallel_calculate, "4");
+	rthread_create(&u5, USER_LEVEL, &parallel_calculate, "5");
+	rthread_create(&u6, USER_LEVEL, &parallel_calculate, "6");
+	rthread_create(&u7, USER_LEVEL, &parallel_calculate, "7");
+	rthread_create(&u8, USER_LEVEL, &parallel_calculate, "8");
 
 	fprintf(stdout, "Main Thread Starts !\n");
 
@@ -120,6 +124,10 @@ int main() {
 	rthread_join(u2, NULL);
 	rthread_join(u3, NULL);
 	rthread_join(u4, NULL);
+	rthread_join(u5, NULL);
+	rthread_join(u6, NULL);
+	rthread_join(u7, NULL);
+	rthread_join(u8, NULL);
 
 	fprintf(stdout, "Main Thread Ends !\n");
 

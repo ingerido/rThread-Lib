@@ -21,10 +21,10 @@
 #include "rthread.h"
 
 /* user level thread Queue Definition */
-static Queue _thread_queue;
+static list_node _thread_queue[PRIORITY];
 
 /* current user level Thread context (for user level thread only !) */
-static ucontext_t *current_uthread_context[K_THREAD_MAX];
+static list_node *cur_node[K_THREAD_MAX];
 
 /* kernel thread context */
 static ucontext_t context_main[K_THREAD_MAX];
@@ -46,44 +46,42 @@ static struct sigaction schedHandle;
 
 static struct itimerval timeQuantum;
 
+static struct itimerval zero_timer = { 0 };
+
+static int sched = 0;
 
 /* For debugging */
 static int t = 0;
 
 /*********************************************************
-				Queue ADT Implementation
+				Linked List Operations
 **********************************************************/
 
-int enQueue(Queue *q, void *element) 
-{
-	if (q->head == (q->rear + 1) % q->size) {
-		ERR_LOG("queue full ...");
-		return -1;
-	} else {
-		q->queue[q->rear] = element;
-		q->rear = (q->rear + 1) % q->size;
-		return 0;
-	}		
-}
-
-int deQueue(Queue *q, void **element) 
-{
-	if (q->head == q->rear) {
-		ERR_LOG("queue empty ...");
-		return -1;
-	} else {
-		*element = q->queue[q->head];
-		q->head = (q->head + 1) % q->size;
-		return 0;
-	}
-}
-
-int isQueueEmpty(Queue q) 
-{
-	if (q.head == q.rear)
+static inline int isQueueEmpty(list_node *q) {
+	if ((q->prev == q) && (q->next == q))
 		return -1;
 	else
 		return 0;
+}
+
+static inline void enQueue(list_node *q, list_node *node) {
+	node->next = q;
+	q->prev->next = node;
+	node->prev = q->prev;
+	q->prev = node;
+}
+
+static inline int deQueue(list_node *q, list_node **node) {
+	if (-1 == isQueueEmpty(q))
+		return -1;
+	*node = q->next;
+	q->next = q->next->next;
+	q->next->prev = q;
+
+	(*node)->next = NULL;
+	(*node)->prev = NULL;
+
+	return 0;
 }
 
 /*********************************************************
@@ -97,14 +95,6 @@ void rthread_init()
 	FILE *fp;
 	fp = freopen(ERR_LOG_FILE, "w", stderr);
 	dup2(fileno(fp), fileno(stderr));
-
-	/* Initialize _thread_queue */
-	_thread_queue.size = U_THREAD_MAX + 1;
-	_thread_queue.queue = (void**)malloc(_thread_queue.size*sizeof(void*));
-	assert (_thread_queue.queue);
-	memset(_thread_queue.queue, 0, _thread_queue.size*sizeof(void*));
-	_thread_queue.head = 0;
-	_thread_queue.rear = 0;
 	
 	/* Initialize time quantum */
 	timeQuantum.it_value.tv_sec = 0;
@@ -127,18 +117,36 @@ int rthread_create(rthread_t *tid,
 		}
 
 		/* create a TCB for the new thread */
-		_tcb* newThread = (_tcb*)malloc(sizeof(_tcb));
+		_tcb* newThread = (_tcb*)malloc(sizeof(_tcb) + 1 + _THREAD_STACK);
 
 		/* allocate space for the newly created thread on stack */
-		newThread->stack = (void*)malloc(_THREAD_STACK);
+		/*newThread->stack = (void*)malloc(_THREAD_STACK);
 		if (NULL == newThread->stack) {
 			ERR_LOG("Failed to allocate space for stack!");
 			return -1;
+		}*/
+
+		if (0 == _user_thread_num) {
+			/* Initialize time quantum */
+			timeQuantum.it_value.tv_sec = 0;
+			timeQuantum.it_value.tv_usec = TIME_QUANTUM;
+			timeQuantum.it_interval.tv_sec = 0;
+			timeQuantum.it_interval.tv_usec = TIME_QUANTUM;
+
+			_thread_queue->prev = _thread_queue; 
+			_thread_queue->next = _thread_queue;
 		}
 
 		/* set thread id and level */
 		newThread->tid = _user_thread_num++;
 		*tid = newThread->tid;
+
+		// set initial priority to be the highest 
+		newThread->priority = 0;
+
+		// set node in thread run queue
+		newThread->node.next = NULL;
+		newThread->node.prev = NULL;
 
 		/* Initialize sigsem_thread */
 		sigsem_thread[newThread->tid].val = NULL;
@@ -161,7 +169,11 @@ int rthread_create(rthread_t *tid,
 
 		/* add newly created user level thread to the user level thread run queue */	
 		while(__sync_lock_test_and_set(&_spinlock, 1));
-		enQueue(&_thread_queue, (void*)&newThread->context);	
+
+		enQueue(_thread_queue + newThread->priority, &newThread->node);	
+
+		//enQueue(&_thread_queue, (void*)&newThread->context);
+
 		__sync_lock_release(&_spinlock);
 
 	} else if (KERNEL_LEVEL == level) {
@@ -191,20 +203,23 @@ int rthread_create(rthread_t *tid,
 int rthread_yield() 
 {
 	uint k_tid = (uint)syscall(SYS_gettid);
-	_tcb* current_tcb = GET_TCB(current_uthread_context[k_tid & K_CONTEXT_MASK], _tcb, context);
+	_tcb* cur_tcb = GET_TCB(cur_node[k_tid & K_CONTEXT_MASK]);
+	// _tcb* current_tcb = GET_TCB(current_uthread_context[k_tid & K_CONTEXT_MASK], _tcb, context);
 	while(__sync_lock_test_and_set(&_spinlock, 1));
 
-	if (RUNNING == current_tcb->status) {
+	if (RUNNING == cur_tcb->status) {
 		#ifdef _DEBUG_
 			fprintf(stdout, "yielding... !\n");
 			fprintf(stdout, "****** status = %d ******!\n", current_tcb->status);
 		#endif
 
-		current_tcb->status = SUSPENDED;
-		enQueue(&_thread_queue, current_uthread_context[k_tid & K_CONTEXT_MASK]);
+		cur_tcb->status = SUSPENDED;
+		// enQueue(&_thread_queue, current_uthread_context[k_tid & K_CONTEXT_MASK]);
+		enQueue(_thread_queue + cur_tcb->priority, cur_node[k_tid & K_CONTEXT_MASK]);
 		__sync_lock_release(&_spinlock);
 		
-		swapcontext(current_uthread_context[k_tid & K_CONTEXT_MASK], &context_main[k_tid & K_CONTEXT_MASK]);
+		// swapcontext(current_uthread_context[k_tid & K_CONTEXT_MASK], &context_main[k_tid & K_CONTEXT_MASK]);
+		swapcontext(&(cur_tcb->context), &context_main[k_tid & K_CONTEXT_MASK]);
 	} else
 		__sync_lock_release(&_spinlock);
 	return 0;
@@ -225,11 +240,14 @@ int rthread_join(rthread_t thread, void **value_ptr)
 void rthread_exit(void *retval) 
 {
 	uint k_tid = (uint)syscall(SYS_gettid);
-	_tcb* current_tcb = GET_TCB(current_uthread_context[k_tid & K_CONTEXT_MASK], _tcb, context);
-	rthread_t current_id = current_tcb->tid;
+	// _tcb* current_tcb = GET_TCB(current_uthread_context[k_tid & K_CONTEXT_MASK], _tcb, context);
+	_tcb* cur_tcb = GET_TCB(cur_node[k_tid & K_CONTEXT_MASK]);
+	rthread_t current_id = cur_tcb->tid;
 
-	current_tcb->status = TERMINATED;
-	fprintf(stdout, "User Level Thread tid = %d terminates!\n", current_tcb->tid);
+	cur_tcb->status = TERMINATED;
+	#ifdef _DEBUG_
+		fprintf(stdout, "User Level Thread tid = %d terminates!\n", current_tcb->tid);
+	#endif
 	/* When this thread finished, delete TCB and yield CPU control */
 	_user_thread_num--;
 	
@@ -237,10 +255,12 @@ void rthread_exit(void *retval)
 	memcpy(sigsem_thread[current_id].val, retval, sizeof(unsigned long));
 
 	while(__sync_lock_test_and_set(&_spinlock, 1));
-	enQueue(&_thread_queue, current_uthread_context[k_tid & K_CONTEXT_MASK]);	
+	// enQueue(&_thread_queue, current_uthread_context[k_tid & K_CONTEXT_MASK]);	
+	enQueue(_thread_queue + cur_tcb->priority, cur_node[k_tid & K_CONTEXT_MASK]);	
 	__sync_lock_release(&_spinlock);
 
-	swapcontext(current_uthread_context[k_tid & K_CONTEXT_MASK], &context_main[k_tid & K_CONTEXT_MASK]);
+	// swapcontext(current_uthread_context[k_tid & K_CONTEXT_MASK], &context_main[k_tid & K_CONTEXT_MASK]);
+	swapcontext(&(cur_tcb->context), &context_main[k_tid & K_CONTEXT_MASK]);
 }
 
 /* schedule the user level threads */
@@ -249,20 +269,30 @@ static void schedule()
 	/* Note: calling printf() from a signal handler is not
 	  strictly correct, since printf() is not async-signal-safe;
 	  see signal(7) */
-	
+
 	uint k_tid = (uint)syscall(SYS_gettid);
 	
+	_tcb* cur_tcb = GET_TCB(cur_node[k_tid & K_CONTEXT_MASK]);
+
 	#ifdef _DEBUG_
 		fprintf(stdout, "times up !\n");
 		t++;
 	#endif
 
 	while(__sync_lock_test_and_set(&_spinlock, 1));
-	enQueue(&_thread_queue, (void*)current_uthread_context[k_tid & K_CONTEXT_MASK]);
+
+	cur_tcb->status = SUSPENDED;
+
+	if (MLFQ == sched && cur_tcb->priority < PRIORITY - 1)
+		++cur_tcb->priority;
+
+	// enQueue(&_thread_queue, (void*)current_uthread_context[k_tid & K_CONTEXT_MASK]);
+	enQueue(_thread_queue + cur_tcb->priority, cur_node[k_tid & K_CONTEXT_MASK]);
+
 	__sync_lock_release(&_spinlock);
 	
-	swapcontext(current_uthread_context[k_tid & K_CONTEXT_MASK], &context_main[k_tid & K_CONTEXT_MASK]);
-
+	// swapcontext(current_uthread_context[k_tid & K_CONTEXT_MASK], &context_main[k_tid & K_CONTEXT_MASK]);
+	swapcontext(&(cur_tcb->context), &context_main[k_tid & K_CONTEXT_MASK]);
 }
 
 int rthread_schedule() 
@@ -278,8 +308,11 @@ int rthread_schedule()
 	uint k_tid = (uint)syscall(SYS_gettid);
 
 	/* thread TCB and context */
-	ucontext_t *next_thread_uc = NULL;
-	_tcb* current_tcb = NULL;
+	// ucontext_t *next_thread_uc = NULL;
+	// _tcb* current_tcb = NULL;
+
+	list_node *run_node = NULL;
+	_tcb* run_tcb = NULL;
 
 	/*  grab and run a user level thread from 
 		the user level thread queue, until no available 
@@ -288,28 +321,34 @@ int rthread_schedule()
 	while (1) {
 		while(__sync_lock_test_and_set(&_spinlock, 1));
 		
-		if (0 != deQueue(&_thread_queue, (void**)&next_thread_uc)) {
+		// if (0 != deQueue(&_thread_queue, (void**)&next_thread_uc)) {
+		if (0 != deQueue(_thread_queue, &run_node)) {
 			ERR_LOG("Failed to grab a user level thread from the queue!");
 			__sync_lock_release(&_spinlock);
+
+			setitimer(ITIMER_PROF, &zero_timer, &timeQuantum);
+
 			break;
 		}
 		__sync_lock_release(&_spinlock);
 
-		current_tcb = GET_TCB((ucontext_t*)next_thread_uc, _tcb, context);
-		
+		//current_tcb = GET_TCB((ucontext_t*)next_thread_uc, _tcb, context);
+		run_tcb = GET_TCB(run_node);		
+
 		/* current user thread is already terminated or finished by rthread_exit() */
-		if (TERMINATED == current_tcb->status || FINISHED == current_tcb->status) {
+		if (TERMINATED == run_tcb->status || FINISHED == run_tcb->status) {
 			/* do V() in thread semaphore implies current user level thread is done */
-			sem_post(&(sigsem_thread[current_tcb->tid].semaphore));
-			free(current_tcb->stack);
-			free(current_tcb);
+			sem_post(&(sigsem_thread[run_tcb->tid].semaphore));
+			// free(current_tcb->stack);
+			free(run_tcb);
 			_user_thread_num--;
 			continue;
 		}
 
-		current_tcb->status = RUNNING;
-		current_uthread_context[k_tid & K_CONTEXT_MASK] = (ucontext_t*)next_thread_uc;
-		swapcontext(&context_main[k_tid & K_CONTEXT_MASK], (ucontext_t*)next_thread_uc);
+		run_tcb->status = RUNNING;
+		cur_node[k_tid & K_CONTEXT_MASK] = run_node;
+		// swapcontext(&context_main[k_tid & K_CONTEXT_MASK], (ucontext_t*)next_thread_uc);
+		swapcontext(&context_main[k_tid & K_CONTEXT_MASK], &(run_tcb->context));
 	}
 	return 0;
 }
@@ -336,10 +375,13 @@ void u_thread_exec_func(void (*thread_func)(void*), void *arg, _tcb *newThread)
 	#endif
 
 	while(__sync_lock_test_and_set(&_spinlock, 1));
-	enQueue(&_thread_queue, current_uthread_context[k_tid & K_CONTEXT_MASK]);	
+	// enQueue(&_thread_queue, current_uthread_context[k_tid & K_CONTEXT_MASK]);
+	enQueue(_thread_queue + u_thread->priority, cur_node[k_tid & K_CONTEXT_MASK]);
+
 	__sync_lock_release(&_spinlock);
 
-	swapcontext(current_uthread_context[k_tid & K_CONTEXT_MASK], &context_main[k_tid & K_CONTEXT_MASK]);
+	// swapcontext(current_uthread_context[k_tid & K_CONTEXT_MASK], &context_main[k_tid & K_CONTEXT_MASK]);
+	swapcontext(&u_thread->context, &context_main[k_tid & K_CONTEXT_MASK]);
 
 }
 
@@ -349,8 +391,12 @@ void k_thread_exec_func(void *arg)
 	uint k_tid = (uint)syscall(SYS_gettid);
 
 	char *t_name = (char*) arg;
-	ucontext_t *next_thread_uc = NULL;
-	_tcb* current_tcb = NULL;
+
+	//ucontext_t *next_thread_uc = NULL;
+	//_tcb* current_tcb = NULL;
+
+	list_node *run_node = NULL;
+	_tcb* run_tcb = NULL;	
 
 	fprintf(stdout, "I'm Kernel Level Thread \"%s\"  tid = %d \n", t_name, k_tid);
 
@@ -368,29 +414,35 @@ void k_thread_exec_func(void *arg)
 	while (1) {
 TAS:	while(__sync_lock_test_and_set(&_spinlock, 1));
 
-		if (0 != deQueue(&_thread_queue, (void**)&next_thread_uc)) {
+		// if (0 != deQueue(&_thread_queue, (void**)&next_thread_uc)) {
+		if (0 != deQueue(_thread_queue, &run_node)) {
 			__sync_lock_release(&_spinlock);
+
+			setitimer(ITIMER_PROF, &zero_timer, &timeQuantum);
 			//goto TAS;
 			//exit(0);
 			return;
 		}
 		__sync_lock_release(&_spinlock);
 
-		current_tcb = GET_TCB((ucontext_t*)next_thread_uc, _tcb, context);
-		
+		// current_tcb = GET_TCB((ucontext_t*)next_thread_uc, _tcb, context);
+		run_tcb = GET_TCB(run_node);		
+
 		/* current user thread is already terminated or finished by rthread_exit() */
-		if (TERMINATED == current_tcb->status || FINISHED == current_tcb->status) {
+		if (TERMINATED == run_tcb->status || FINISHED == run_tcb->status) {
 			/* do V() in thread semaphore implies current user level thread is done */
-			sem_post(&(sigsem_thread[current_tcb->tid].semaphore));
-			free(current_tcb->stack);
-			free(current_tcb);
+			sem_post(&(sigsem_thread[run_tcb->tid].semaphore));
+			// free(current_tcb->stack);
+			free(run_tcb);
 			_user_thread_num--;
 			continue;
 		}
 
-		current_tcb->status = RUNNING;
-		current_uthread_context[k_tid & K_CONTEXT_MASK] = (ucontext_t*)next_thread_uc;
-		swapcontext(&context_main[k_tid & K_CONTEXT_MASK], (ucontext_t*)next_thread_uc);
+		run_tcb->status = RUNNING;
+		// current_uthread_context[k_tid & K_CONTEXT_MASK] = (ucontext_t*)next_thread_uc;
+		// swapcontext(&context_main[k_tid & K_CONTEXT_MASK], (ucontext_t*)next_thread_uc);
+		cur_node[k_tid & K_CONTEXT_MASK] = run_node;
+		swapcontext(&context_main[k_tid & K_CONTEXT_MASK], &(run_tcb->context));	
 	}
 }
 
@@ -404,13 +456,8 @@ int rthread_mutex_init(rthread_mutex_t *mutex)
 	mutex->owner = NULL;
 	mutex->lock = 0;
 
-	mutex->wait_list.size = 16;
-	mutex->wait_list.queue = (void**)malloc(mutex->wait_list.size*sizeof(void*));
-	assert (mutex->wait_list.queue);
-
-	memset(mutex->wait_list.queue, 0, mutex->wait_list.size*sizeof(void*));
-	mutex->wait_list.head = 0;
-	mutex->wait_list.rear = 0;
+	(&(mutex->wait_list))->prev = &(mutex->wait_list); 
+	(&(mutex->wait_list))->next = &(mutex->wait_list);
 
 	return 0;
 }
@@ -420,18 +467,25 @@ int rthread_mutex_lock(rthread_mutex_t *mutex)
 {
 	uint k_tid = (uint)syscall(SYS_gettid);
 	/* Use "test-and-set" atomic operation to aquire the mutex lock */
-	while (__sync_lock_test_and_set(&mutex->lock, 1)) {
+	/*while (__sync_lock_test_and_set(&mutex->lock, 1)) {
 		enQueue(&mutex->wait_list, current_uthread_context[k_tid & K_CONTEXT_MASK]);
 		swapcontext(current_uthread_context[k_tid & K_CONTEXT_MASK], &context_main[k_tid & K_CONTEXT_MASK]);
 	}
-	mutex->owner = GET_TCB(current_uthread_context[k_tid & K_CONTEXT_MASK], _tcb, context);
+	mutex->owner = GET_TCB(current_uthread_context[k_tid & K_CONTEXT_MASK], _tcb, context);*/
+
+	while (__sync_lock_test_and_set(&mutex->lock, 1)) {
+		enQueue(&mutex->wait_list, cur_node[k_tid & K_CONTEXT_MASK]);
+		swapcontext(&(GET_TCB(cur_node[k_tid & K_CONTEXT_MASK])->context), &context_main[k_tid & K_CONTEXT_MASK]);
+	}
+	mutex->owner = GET_TCB(cur_node[k_tid & K_CONTEXT_MASK]);
+
 	return 0;
 }
 
 /* release the mutex lock */
 int rthread_mutex_unlock(rthread_mutex_t *mutex) 
 {
-	void *next_thread_context = NULL;
+	/*void *next_thread_context = NULL;
 	if (0 != deQueue(&mutex->wait_list, &next_thread_context)) {
 		__sync_lock_release(&mutex->lock);
 		mutex->owner = NULL;
@@ -442,17 +496,33 @@ int rthread_mutex_unlock(rthread_mutex_t *mutex)
 	__sync_lock_release(&_spinlock);
 	__sync_lock_release(&mutex->lock);
 	mutex->owner = NULL;
+	return 0;*/
+	list_node *next_node = NULL;
+	_tcb* cur_tcb = NULL;
+	if (0 != deQueue(&(mutex->wait_list), &next_node)) {
+		__sync_lock_release(&mutex->lock);
+		mutex->owner = NULL;
+		return 0;
+	}
+	cur_tcb = GET_TCB(next_node);
+	cur_tcb->priority = 0;
+	while(__sync_lock_test_and_set(&_spinlock, 1));
+	enQueue(_thread_queue + cur_tcb->priority, next_node);	
+	__sync_lock_release(&_spinlock);
+	__sync_lock_release(&mutex->lock);
+	mutex->owner = NULL;
 	return 0;
 }
 
 /* destory the mutex lock */
-int rthread_mutex_destory(rthread_mutex_t *mutex)
+int rthread_mutex_destroy(rthread_mutex_t *mutex)
 {
-	if (0 == mutex->lock){
+	/*if (0 == mutex->lock){
 		free(mutex->wait_list.queue);
 		return 0;
 	}
-	return -1;	
+	return -1;*/
+	return 0;
 }
 
 /*********************************************************
@@ -461,13 +531,16 @@ int rthread_mutex_destory(rthread_mutex_t *mutex)
 /* initial condition variable */
 int rthread_cond_init(rthread_cond_t *condvar) 
 {
-	condvar->wait_list.size = U_THREAD_MAX;
+	/*condvar->wait_list.size = U_THREAD_MAX;
 	condvar->wait_list.queue = (void**)malloc(condvar->wait_list.size*sizeof(void*));
 	assert (condvar->wait_list.queue);
 
 	memset(condvar->wait_list.queue, 0, condvar->wait_list.size*sizeof(void*));
 	condvar->wait_list.head = 0;
-	condvar->wait_list.rear = 0;
+	condvar->wait_list.rear = 0;*/
+
+	(&(condvar->wait_list))->prev = &(condvar->wait_list); 
+	(&(condvar->wait_list))->next = &(condvar->wait_list);
 
 	return 0;
 }
@@ -475,26 +548,47 @@ int rthread_cond_init(rthread_cond_t *condvar)
 /* wake up all threads on waiting list of condition variable */
 int rthread_cond_broadcast(rthread_cond_t *condvar) 
 {
-	void *next_thread_context = NULL;
+	/*void *next_thread_context = NULL;
 	while (0 != deQueue(&condvar->wait_list, &next_thread_context)) {
 		while(__sync_lock_test_and_set(&_spinlock, 1));
 		enQueue(&_thread_queue, next_thread_context);	
 		__sync_lock_release(&_spinlock);
-	}
+	}*/
 
+	list_node *next_node = NULL;
+	_tcb* cur_tcb = NULL;
+	while (0 != deQueue(&(condvar->wait_list), &next_node)) {
+		cur_tcb = GET_TCB(next_node);
+		cur_tcb->priority = 0;
+		while(__sync_lock_test_and_set(&_spinlock, 1));
+		enQueue(_thread_queue + cur_tcb->priority, next_node);	
+		__sync_lock_release(&_spinlock);
+	}
 	return 0;
 }
 
 /* wake up a thread on waiting list of condition variable */
 int rthread_cond_signal(rthread_cond_t *condvar) 
 {
-	void *next_thread_context = NULL;
+	/*void *next_thread_context = NULL;
 	if (0 != deQueue(&condvar->wait_list, &next_thread_context)) {
 		return 0;
 	}
 
 	while(__sync_lock_test_and_set(&_spinlock, 1));
 	enQueue(&_thread_queue, next_thread_context);	
+	__sync_lock_release(&_spinlock);*/
+
+	list_node *next_node = NULL;
+	_tcb* cur_tcb = NULL;
+	if (0 != deQueue(&(condvar->wait_list), &next_node)) {
+		return 0;
+	}
+
+	cur_tcb = GET_TCB(next_node);
+	cur_tcb->priority = 0;
+	while(__sync_lock_test_and_set(&_spinlock, 1));
+	enQueue(_thread_queue + cur_tcb->priority, next_node);	
 	__sync_lock_release(&_spinlock);
 
 	return 0;
@@ -503,21 +597,31 @@ int rthread_cond_signal(rthread_cond_t *condvar)
 /* current thread go to sleep until other thread wakes it up */
 int rthread_cond_wait(rthread_cond_t* condvar, rthread_mutex_t *mutex) 
 {
-	uint k_tid = (uint)syscall(SYS_gettid);
+	/*uint k_tid = (uint)syscall(SYS_gettid);
 
 	ucontext_t *current_thread_context = current_uthread_context[k_tid & K_CONTEXT_MASK];
 	enQueue(&condvar->wait_list, current_thread_context);
 
 	rthread_mutex_unlock(mutex);
 	swapcontext((ucontext_t*)current_thread_context, &context_main[k_tid & K_CONTEXT_MASK]);
+	rthread_mutex_lock(mutex);*/
+
+	uint k_tid = (uint)syscall(SYS_gettid);
+
+	list_node *node = cur_node[k_tid & K_CONTEXT_MASK];
+	enQueue(&condvar->wait_list, node);
+
+	rthread_mutex_unlock(mutex);
+	swapcontext(&(GET_TCB(cur_node[k_tid & K_CONTEXT_MASK])->context), &context_main[k_tid & K_CONTEXT_MASK]);
 	rthread_mutex_lock(mutex);
+
 	return 0;
 }
 
 /* destory condition variable */
-int rthread_cond_destory(rthread_cond_t *condvar)
+int rthread_cond_destroy(rthread_cond_t *condvar)
 {
-	free(condvar->wait_list.queue);
+	//free(condvar->wait_list.queue);
 	return 0;	
 }
 

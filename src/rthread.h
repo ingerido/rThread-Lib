@@ -16,6 +16,8 @@
  * update: 10/17/2016 (Add Round Robin Scheduler for user level threads)
  * update: 11/06/2016 (Add rthread_mutex_destory() and rthread_cond_destory())
  * update: 11/13/2016 (Fix segmentation fault bugs and correct the logic in context switch)
+ * update: 10/03/2017 (Modify logic from queue ADT to linked list ADT)
+ * update: 10/06/2017 (Modify stack space for tcb by using struct hack)
 */
 
 #ifndef RTHREAD_H
@@ -45,21 +47,18 @@
 #define   USER_LEVEL 1
 
 #define _THREAD_STACK 1024*32
-
 #define U_THREAD_MAX 16
-
 #define K_THREAD_MAX 4
-
 #define K_CONTEXT_MASK 0b11
-
+#define PRIORITY 16
 #define TIME_QUANTUM 50000
 
 #define ERR_LOG_FILE "rThread_err_log"
 
 #define ERR_LOG(string) fprintf(stderr, "rThread: " string "\n")
 
-#define GET_TCB(uc_ptr, tcb, ctx) \
-				((tcb*)((char*)(uc_ptr) - (unsigned long long)(&((tcb*)0)->ctx)))
+#define GET_TCB(ll_ptr) \
+				((_tcb*)((char*)(ll_ptr) - (unsigned long long)(&((_tcb*)0)->node)))
 
 /* Typedef */
 typedef uint threadMode;
@@ -67,6 +66,11 @@ typedef uint threadMode;
 typedef uint threadLevel;
 
 typedef uint rthread_t;
+
+/* Task Linked List */
+typedef struct list_node {
+	struct list_node *next, *prev;
+} list_node;
 
 /* rThread Status Definition */
 typedef enum threadStatus {
@@ -77,12 +81,19 @@ typedef enum threadStatus {
 	FINISHED,
 } threadStatus;
 
+typedef enum schedPolicy {
+	RR = 0,
+	MLFQ,
+} schedPolicy;
+
 /* user_level Thread Control Block Definition */
 typedef struct threadControlBlock {
 	rthread_t   tid;			/* Thread ID            */
 	threadStatus status;		/* Thread Status        */
 	ucontext_t context;			/* Thread Contex        */
-	void *stack;				/* Thread Stack pointer */
+	uint       priority;        /* Thread Priority      */
+	list_node  node;            /* Thread Node in Queue */
+	char stack[1];				/* Thread Stack pointer */
 } _tcb;
 
 /* sig_semaphore Definition */
@@ -91,37 +102,18 @@ typedef struct sig_semaphore {
 	unsigned long *val;
 } sig_semaphore;
 
-/* Queue ADT */
-typedef struct Queue {
-	void **queue;
-	int size;
-	int head;
-	int rear;
-} Queue;
-
 /* mutex struct definition */
 typedef struct rthread_mutex_t {
 	_tcb *owner;
 	uint lock;
-	Queue wait_list;
+	list_node wait_list;
 } rthread_mutex_t;
 
 /* condition variable struct definition */
 typedef struct rthread_cond_t {
-	Queue wait_list;
+	list_node wait_list;
 	rthread_mutex_t list_mutex;
 } rthread_cond_t;
-
-
-/*********************************************************
-                    Queue ADT Operation
-**********************************************************/
-
-int enQueue(Queue *q, void *element);
-
-int deQueue(Queue *q, void **element);
-
-int isQueueEmpty(Queue q);
 
 /*********************************************************
                     rThread Operation
@@ -168,7 +160,7 @@ int rthread_mutex_lock(rthread_mutex_t *mutex);
 int rthread_mutex_unlock(rthread_mutex_t *mutex);
 
 /* destory the mutex lock */
-int rthread_mutex_destory(rthread_mutex_t *mutex);
+int rthread_mutex_destroy(rthread_mutex_t *mutex);
 
 /*********************************************************
 					Condition Variable
@@ -187,7 +179,7 @@ int rthread_cond_signal(rthread_cond_t *condvar);
 int rthread_cond_wait(rthread_cond_t *condvar, rthread_mutex_t *mutex);
 
 /* destory condition variable */
-int rthread_cond_destory(rthread_cond_t *condvar);
+int rthread_cond_destroy(rthread_cond_t *condvar);
 
 #endif
 
